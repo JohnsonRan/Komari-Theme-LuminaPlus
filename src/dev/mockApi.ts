@@ -219,7 +219,7 @@ function latestStatus() {
         {
           online: true,
           cpu,
-          gpu: node.gpu_name ? { usage: 34 + index * 8, memoryUsed: 18 * GIB, memoryTotal: 40 * GIB, temperature: 52 + index * 3 } : undefined,
+          gpu: node.gpu_name ? { count: 1, average_usage: 34 + index * 8, detailed_info: [{ name: node.gpu_name, memory_used: 18 * GIB, memory_total: 40 * GIB, utilization: 34 + index * 8, temperature: 52 + index * 3 }] } : undefined,
           ram: (node.mem_total * memoryPct) / 100,
           ram_total: node.mem_total,
           swap: (node.swap_total * swapPct) / 100,

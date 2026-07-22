@@ -37,6 +37,7 @@ export interface LoadMetricSeries {
   metricKey: string;
   client: string;
   intervalSeconds?: number;
+  tags?: Record<string, string>;
   points: Array<{ time: string; value: number | null; count: number }>;
 }
 
@@ -67,21 +68,58 @@ function emptyLoadRecord(client: string, time: string): LoadRecord {
   };
 }
 
+// GPU device 指标带 device_index tag，多 GPU 节点会返回多条同 key 序列，需要聚合。
+const GPU_SUM_FIELDS = new Set(["gpu_memory_used", "gpu_memory_total"]);
+const GPU_AVG_FIELDS = new Set(["gpu_temperature"]);
+
 export function mergeLoadMetricSeries(series: LoadMetricSeries[]): LoadRecord[] {
   const records = new Map<string, LoadRecord>();
+  // 用于 GPU device 指标聚合：key → field → timeKey → { sum, count }
+  const gpuAccum = new Map<string, Map<string, { sum: number; count: number }>>();
+
   for (const item of series) {
     const field = LOAD_METRIC_FIELD[item.metricKey as keyof typeof LOAD_METRIC_FIELD];
     if (!field || !item.client) continue;
+    const isGpuDevice = Boolean(item.tags?.device_index != null);
+
     for (const point of item.points) {
       if (point.count <= 0 || point.value == null || !Number.isFinite(point.value)) continue;
       const timeMs = Date.parse(point.time);
       if (!Number.isFinite(timeMs)) continue;
       const key = `${item.client}\u0000${timeMs}`;
       const record = records.get(key) ?? emptyLoadRecord(item.client, point.time);
-      record[field] = point.value;
       records.set(key, record);
+
+      if (isGpuDevice && (GPU_SUM_FIELDS.has(field) || GPU_AVG_FIELDS.has(field))) {
+        // 多 GPU 设备聚合
+        let fieldMap = gpuAccum.get(key);
+        if (!fieldMap) {
+          fieldMap = new Map();
+          gpuAccum.set(key, fieldMap);
+        }
+        const acc = fieldMap.get(field) ?? { sum: 0, count: 0 };
+        acc.sum += point.value;
+        acc.count += 1;
+        fieldMap.set(field, acc);
+      } else {
+        record[field] = point.value;
+      }
     }
   }
+
+  // 应用 GPU 聚合结果
+  for (const [key, fieldMap] of gpuAccum) {
+    const record = records.get(key);
+    if (!record) continue;
+    for (const [field, acc] of fieldMap) {
+      if (GPU_SUM_FIELDS.has(field)) {
+        (record as Record<string, number>)[field] = acc.sum;
+      } else {
+        (record as Record<string, number>)[field] = acc.count > 0 ? acc.sum / acc.count : 0;
+      }
+    }
+  }
+
   return [...records.values()].sort(
     (left, right) => Date.parse(String(left.time)) - Date.parse(String(right.time)),
   );

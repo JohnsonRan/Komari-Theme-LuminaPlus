@@ -507,6 +507,7 @@ async function getLoadMetricData(
     metricKey: item.metric_key,
     client: item.entity_id,
     intervalSeconds: item.interval_seconds,
+    tags: item.tags ?? item.tag,
     points: item.points,
   }));
   const records = mergeLoadMetricSeries(series);

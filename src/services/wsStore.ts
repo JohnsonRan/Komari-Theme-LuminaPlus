@@ -541,6 +541,54 @@ export function resolveFlatConnectionsTcp(payload: RealtimePayload): number {
   return Math.max(0, asNumber(payload.connections) - asNumber(payload.connections_udp));
 }
 
+/**
+ * 解析后端 v1.Report 中的 GPU 字段。
+ * 后端协议：{ count, average_usage, detailed_info: [{ name, memory_total, memory_used, utilization, temperature }] }
+ * 兼容旧版扁平字段（usage / memoryUsed 等）。
+ */
+function parseGpuReport(
+  gpu: RealtimePayload,
+): { usage: number; memoryUsed?: number; memoryTotal?: number; temperature?: number } | undefined {
+  if (Object.keys(gpu).length === 0) return undefined;
+
+  // 新版协议：average_usage + detailed_info[]
+  const detailedInfo = gpu.detailed_info;
+  if (Array.isArray(detailedInfo) && detailedInfo.length > 0) {
+    let memoryUsed = 0;
+    let memoryTotal = 0;
+    let tempSum = 0;
+    let tempCount = 0;
+    for (const device of detailedInfo) {
+      const d = asRecord(device);
+      memoryUsed += asNumber(d.memory_used ?? d.memoryUsed);
+      memoryTotal += asNumber(d.memory_total ?? d.memoryTotal);
+      const temp = asNumber(d.temperature, -1);
+      if (temp >= 0) {
+        tempSum += temp;
+        tempCount += 1;
+      }
+    }
+    return {
+      usage: asNumber(gpu.average_usage ?? gpu.averageUsage ?? gpu.usage),
+      memoryUsed,
+      memoryTotal,
+      temperature: tempCount > 0 ? tempSum / tempCount : undefined,
+    };
+  }
+
+  // 旧版 / 扁平协议兼容
+  const usage = asNumber(gpu.average_usage ?? gpu.averageUsage ?? gpu.usage);
+  if (usage <= 0 && !asNumber(gpu.memory_used ?? gpu.memoryUsed) && !asNumber(gpu.temperature)) {
+    return undefined;
+  }
+  return {
+    usage,
+    memoryUsed: asNumber(gpu.memory_used ?? gpu.memoryUsed) || undefined,
+    memoryTotal: asNumber(gpu.memory_total ?? gpu.memoryTotal) || undefined,
+    temperature: asNumber(gpu.temperature) || undefined,
+  };
+}
+
 function normalizeRealtime(
   raw: unknown,
   meta: NodeInfo,
@@ -567,14 +615,7 @@ function normalizeRealtime(
   if (hasNestedShape) {
     return {
       cpu: { usage: asNumber(cpu.usage) },
-      gpu: Object.keys(gpu).length > 0
-        ? {
-            usage: asNumber(gpu.usage),
-            memoryUsed: asNumber(gpu.memoryUsed ?? gpu.memory_used),
-            memoryTotal: asNumber(gpu.memoryTotal ?? gpu.memory_total),
-            temperature: asNumber(gpu.temperature),
-          }
-        : undefined,
+      gpu: parseGpuReport(gpu),
       ram: {
         total: asNumber(ram.total, metrics.ramTotal || meta.mem_total),
         used: asNumber(ram.used),
@@ -611,14 +652,16 @@ function normalizeRealtime(
 
   return {
     cpu: { usage: asNumber(payload.cpu) },
-    gpu: asNumber(payload.gpu) > 0 || asNumber(payload.gpu_temperature) > 0
-      ? {
-          usage: asNumber(payload.gpu),
-          memoryUsed: asNumber(payload.gpu_memory_used),
-          memoryTotal: asNumber(payload.gpu_memory_total),
-          temperature: asNumber(payload.gpu_temperature),
-        }
-      : undefined,
+    gpu: typeof payload.gpu === "object" && payload.gpu !== null
+      ? parseGpuReport(asRecord(payload.gpu))
+      : asNumber(payload.gpu) > 0 || asNumber(payload.gpu_temperature) > 0
+        ? {
+            usage: asNumber(payload.gpu),
+            memoryUsed: asNumber(payload.gpu_memory_used) || undefined,
+            memoryTotal: asNumber(payload.gpu_memory_total) || undefined,
+            temperature: asNumber(payload.gpu_temperature) || undefined,
+          }
+        : undefined,
     ram: {
       total: asNumber(payload.ram_total, metrics.ramTotal || meta.mem_total),
       used: asNumber(payload.ram),
