@@ -435,7 +435,7 @@ export function installDevMockApi() {
       return json({
         sitename: "Lumina Ops",
         description: "全球节点运行状态",
-        theme: "komari-theme-luminaPlus",
+        theme: "komari-theme-luminalite",
         allow_cors: false,
         disable_password_login: false,
         oauth_enable: false,

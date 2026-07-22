@@ -106,6 +106,11 @@ export function Instance() {
     }
   }, [chartType, showPingChart]);
 
+  useEffect(() => {
+    // 进入详情页或切换节点时回到顶部，避免保留上一页的滚动位置。
+    window.scrollTo(0, 0);
+  }, [uuid]);
+
   if (!uuid) return null;
 
   const trimmedName = meta?.name?.trim();

@@ -1,4 +1,4 @@
-/* LuminaPlus 共享表面样式 */
+/* LuminaLite 共享表面样式 */
 
 /* 固定的全视口背景图,画在 body::before 上以便首帧即存在(index.html 内联脚本在 React
    挂载前就注入这些变量,避免不透明→玻璃的闪烁)。位于 body 的 --bg-0 兜底之上、#root 内容
@@ -145,7 +145,7 @@ body::after {
   transform: scale(0.96);
 }
 
-/* 普通页面只处理页面边距与 iOS PWA 安全区，不为首页专属悬浮卡留空。 */
+/* 普通页面只处理页面边距与 iOS 安全区，不为首页专属悬浮卡留空。 */
 .app-main {
   --app-gutter: 0.75rem;
   padding-left: max(var(--app-gutter), env(safe-area-inset-left, 0px));

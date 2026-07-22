@@ -844,7 +844,7 @@
 }
 
 /* 首页顶部为 36px 快捷设置按钮保留最小 48px 控制区：上下各约 6px。
-   iOS PWA 的状态栏安全区由 app-main 统一叠加。 */
+   iOS 的状态栏安全区由 app-main 统一叠加。 */
 .home-dashboard {
   padding-top: 28px;
 }

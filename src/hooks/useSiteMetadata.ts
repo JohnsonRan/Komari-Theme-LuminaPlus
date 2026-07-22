@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 
-const FALLBACK_TITLE = "Komari-Theme-LuminaPlus";
+const FALLBACK_TITLE = "Komari-Theme-LuminaLite";
 const FALLBACK_DESCRIPTION = "A Komari monitor theme.";
 
 function updateMeta(selector: string, attr: "content", value: string) {
@@ -19,7 +19,6 @@ export function useSiteMetadata() {
     const description = config?.description?.trim() || FALLBACK_DESCRIPTION;
 
     document.title = siteName;
-    updateMeta('meta[name="apple-mobile-web-app-title"]', "content", siteName);
     updateMeta('meta[property="og:title"]', "content", siteName);
     updateMeta('meta[name="twitter:title"]', "content", siteName);
     updateMeta('meta[name="description"]', "content", description);
