@@ -62,6 +62,8 @@ const PROCESS_COLORS = [CHART_PALETTE.warning];
 const GPU_KEYS = ["gpu", "gpuMem"];
 const GPU_COLORS = ["#e05d7b", "#c77dff"];
 const GPU_BYTES_KEYS = ["gpuMemBytes"];
+// 模块级常量，避免每次渲染创建新数组引用导致 chart options 变化、图表被整体重建。
+const GPU_BYTES_COLORS = [GPU_COLORS[1]];
 const GPU_TEMP_KEYS = ["gpuTemp"];
 const GPU_TEMP_COLORS = ["#f4a261"];
 const SERIES_LABELS: Record<string, string> = {
@@ -899,7 +901,7 @@ export function LoadChart({
             }
             points={points}
             keys={useBytesUnit ? GPU_BYTES_KEYS : GPU_KEYS}
-            colors={useBytesUnit ? [GPU_COLORS[1]] : GPU_COLORS}
+            colors={useBytesUnit ? GPU_BYTES_COLORS : GPU_COLORS}
             resolvedAppearance={resolvedAppearance}
             rangeHours={hours}
             unit={useBytesUnit ? "" : "%"}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mergeLoadMetricSeries, type LoadMetricSeries } from "@/utils/loadMetrics";
+import {
+  LOAD_METRIC_KEYS,
+  mergeLoadMetricSeries,
+  type LoadMetricSeries,
+} from "@/utils/loadMetrics";
 
 function series(
   metricKey: string,
@@ -45,5 +49,22 @@ describe("mergeLoadMetricSeries", () => {
         series("unknown.metric", "2026-07-13T02:00:00Z", 10),
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("LOAD_METRIC_KEYS", () => {
+  // 新版后端会删除废弃指标定义，queryMetrics 遇到未注册 key 会拒绝整个请求，
+  // 导致 GPU 显存/温度等全部历史指标加载失败。这里防止废弃 key 被误加回查询。
+  it("excludes obsolete total metrics rejected by the backend", () => {
+    expect(LOAD_METRIC_KEYS).not.toContain("memory.total");
+    expect(LOAD_METRIC_KEYS).not.toContain("swap.total");
+    expect(LOAD_METRIC_KEYS).not.toContain("disk.total");
+  });
+
+  it("still queries GPU metrics so GPU charts load history", () => {
+    expect(LOAD_METRIC_KEYS).toContain("gpu.usage");
+    expect(LOAD_METRIC_KEYS).toContain("gpu.memory.used");
+    expect(LOAD_METRIC_KEYS).toContain("gpu.memory.total");
+    expect(LOAD_METRIC_KEYS).toContain("gpu.temperature");
   });
 });

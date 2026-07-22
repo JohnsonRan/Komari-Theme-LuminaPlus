@@ -22,12 +22,18 @@ const LOAD_METRIC_FIELD = {
   "connections.udp": "connections_udp",
 } as const satisfies Record<string, keyof LoadRecord>;
 
-export const LOAD_METRIC_KEYS = Object.keys(LOAD_METRIC_FIELD);
+// memory.total / swap.total / disk.total 已被新版后端废弃（obsoleteBuiltinMetricNames），
+// 其指标定义会在后端启动时被删除。queryMetrics 遇到未注册的 key 会直接拒绝整个请求，
+// 导致包括 GPU 显存/温度在内的全部指标查询失败、回退到不含 GPU 显存/温度的旧 records
+// 接口。因此查询时不能携带这些 key；记录 total 为 0 时调用方会回退到节点静态总量。
+// 映射本身保留，旧版后端若仍返回这些序列也能正常解析。
+const OBSOLETE_METRIC_KEYS = new Set(["memory.total", "swap.total", "disk.total"]);
+
+export const LOAD_METRIC_KEYS = Object.keys(LOAD_METRIC_FIELD).filter(
+  (key) => !OBSOLETE_METRIC_KEYS.has(key),
+);
 
 export const LOAD_LAST_AGGREGATION = {
-  "memory.total": "last",
-  "swap.total": "last",
-  "disk.total": "last",
   "gpu.memory.total": "last",
   "net.total.up": "last",
   "net.total.down": "last",
