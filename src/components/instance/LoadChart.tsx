@@ -324,9 +324,10 @@ const ChartCard = memo(function ChartCard({
     rows: [],
     time: "",
   });
-  const { onCreate, pinned, zoomed, pinnedRef } = useChartInteractions({
+  const { onCreate, pinned, zoomed, isGroupPinned } = useChartInteractions({
     fullRange: xRange ?? null,
     resetSignal,
+    syncKey: "load-sync",
     onUnpin: () => setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev)),
   });
   const data = useMemo(() => metricData(points, keys), [points, keys]);
@@ -357,7 +358,7 @@ const ChartCard = memo(function ChartCard({
       rangeHours,
       estimatedWidth: 176,
       setTooltip,
-      pinnedRef,
+      isPinned: isGroupPinned,
       buildRows: (idx) =>
         keys.map((key, keyIndex) => ({
           label: getSeriesLabel(key),
@@ -379,7 +380,7 @@ const ChartCard = memo(function ChartCard({
         setCursor: [tooltip.onSetCursor],
       },
     };
-  }, [colors, keys, baseOptions, networkUnit, pinnedRef, rangeHours, unit]);
+  }, [colors, keys, baseOptions, networkUnit, isGroupPinned, rangeHours, unit]);
 
   const chartOptions = useMemo<uPlot.Options>(
     () => ({ ...enhancedOptions, width: w, height: h }) as uPlot.Options,
@@ -421,8 +422,9 @@ const ChartCard = memo(function ChartCard({
           options={chartOptions}
           data={data}
           // 实时模式下滑动窗口需要 setData 重置缩放；但用户手动放大后
-          // （zoomed）不能再被每秒的数据更新冲掉，否则缩放永远保不住。
-          resetScales={rangeHours === 0 && !zoomed}
+          // （zoomed）或固定后（pinned）不能再被每秒的数据更新冲掉——
+          // 否则缩放保不住，固定的光标也会随着窗口滑动漂离点选的数据点。
+          resetScales={rangeHours === 0 && !zoomed && !pinned}
           onCreate={onCreate}
         />
         <ChartTooltip tooltip={tooltip} />

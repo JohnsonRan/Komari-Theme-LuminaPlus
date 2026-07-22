@@ -240,15 +240,16 @@ export function buildChartTooltipHooks({
   estimatedWidth,
   setTooltip,
   buildRows,
-  pinnedRef,
+  isPinned,
 }: {
   dataRef: { readonly current: uPlot.AlignedData };
   rangeHours: number;
   estimatedWidth: number;
   setTooltip: Dispatch<SetStateAction<ChartTooltipState>>;
   buildRows: (idx: number) => ChartTooltipState["rows"];
-  // 点击固定：pinned 为 true 时冻结 tooltip，不随光标移动/隐藏。
-  pinnedRef?: MutableRefObject<boolean>;
+  // 点击固定：所在图表组处于固定状态时冻结 tooltip，不随光标移动/隐藏。
+  // 用函数而非 ref：固定状态是「整组图表」共享的（见 useChartInteractions）。
+  isPinned?: () => boolean;
 }): {
   onInit: (u: uPlot) => void;
   onDestroy: (u: uPlot) => void;
@@ -261,7 +262,7 @@ export function buildChartTooltipHooks({
     frame = null;
   };
   const hide = () => {
-    if (pinnedRef?.current) return;
+    if (isPinned?.()) return;
     cancelScheduled();
     setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
   };
@@ -310,7 +311,7 @@ export function buildChartTooltipHooks({
       view = null;
     },
     onSetCursor: (u) => {
-      if (pinnedRef?.current) return;
+      if (isPinned?.()) return;
       if (!view) view = u.root.ownerDocument.defaultView;
       if (frame != null) return;
       frame = view?.requestAnimationFrame(() => update(u)) ?? null;
@@ -426,178 +427,253 @@ export function useResponsiveChartSize(mode: "grid" | "wide" | "strip") {
   return { ...size, ref };
 }
 
-// 跨图表单一固定：同一页面同一时刻最多只有一张图表处于「固定 tooltip」状态，
-// 固定新图表时自动解除其余图表的固定，避免满屏钉死的 tooltip 互相干扰。
-const pinnedChartUnpinners = new Set<() => void>();
-
-function registerPinnedChart(unpin: () => void) {
-  for (const other of [...pinnedChartUnpinners]) {
-    if (other !== unpin) other();
-  }
-  pinnedChartUnpinners.add(unpin);
+// 跨图表联动：同一 syncKey 的图表共享「固定」与「缩放」状态。
+// 固定任意图表 → 整组图表的光标都停在同一时间点并冻结 tooltip；
+// 缩放任意图表 → 整组图表的 X 轴同步到同一时间窗口。
+// syncKey 需与 uPlot cursor.sync.key 一致（光标位置靠 uPlot 内置 sync 广播，
+// 固定/缩放这类「状态」则由本注册表广播）。
+interface SyncGroupEntry {
+  chart: uPlot | null;
+  syncKey: string;
+  fullRangeRef: MutableRefObject<[number, number] | null>;
+  setPinned: (value: boolean) => void;
+  setZoomed: (value: boolean) => void;
+  onUnpinRef: MutableRefObject<(() => void) | undefined>;
 }
 
-// 图表交互：滚轮缩放 X 轴、点击固定 tooltip、重置视图。
+const syncGroupCharts = new Set<SyncGroupEntry>();
+const pinnedSyncGroups = new Set<string>();
+
+export function isSyncGroupPinned(syncKey: string): boolean {
+  return pinnedSyncGroups.has(syncKey);
+}
+
+// uPlot 用私有属性 cursor._lock 冻结光标：为 true 时 mousemove/mouseleave/双击
+// 以及跨图表 sync 光标更新全部被跳过。.d.ts 未声明该属性，故断言。
+function setCursorLock(chart: uPlot, locked: boolean) {
+  (chart.cursor as uPlot.Cursor & { _lock?: boolean })._lock = locked;
+}
+
+// 解除整组固定：逐图回调 onUnpin 隐藏 tooltip。移动端没有 hover，
+// 取消固定后若不主动隐藏，tooltip 会永远留在原处。
+function unpinSyncGroup(syncKey: string) {
+  if (!pinnedSyncGroups.delete(syncKey)) return;
+  for (const entry of [...syncGroupCharts]) {
+    if (entry.syncKey !== syncKey) continue;
+    entry.setPinned(false);
+    if (entry.chart) setCursorLock(entry.chart, false);
+    entry.onUnpinRef.current?.();
+  }
+}
+
+// 把 X 轴窗口广播给同组其余图表，并同步各自的 zoomed 标记。
+// 各图的 fullRange 可能不同（实时为 null），故各自判断 isFull。
+function broadcastXScale(syncKey: string, source: uPlot, min: number, max: number) {
+  for (const entry of [...syncGroupCharts]) {
+    if (entry.syncKey !== syncKey || entry.chart == null || entry.chart === source) continue;
+    entry.chart.setScale("x", { min, max });
+    const full = entry.fullRangeRef.current;
+    const isFull = full != null && min <= full[0] + 0.5 && max >= full[1] - 0.5;
+    entry.setZoomed(!isFull);
+  }
+}
+
+// 图表交互：滚轮缩放 X 轴、点击固定 tooltip、重置视图，且固定/缩放整组联动。
 // fullRange 为可缩放的完整边界（历史模式用请求范围，实时用 null 自动取数据边界）。
 // resetSignal 变化时重置缩放并取消固定（由父组件的刷新按钮驱动）。
-// onUnpin 在取消固定时回调（供调用方隐藏 tooltip）——移动端没有 hover，
-// 取消固定后若不主动隐藏，tooltip 会永远留在原处。
+// onUnpin 在取消固定时回调（供调用方隐藏 tooltip）。
 export function useChartInteractions({
   fullRange,
   resetSignal,
+  syncKey,
   onUnpin,
 }: {
   fullRange: [number, number] | null;
   resetSignal: number;
+  syncKey: string;
   onUnpin?: () => void;
 }) {
   const chartRef = useRef<uPlot | null>(null);
   const [pinned, setPinned] = useState(false);
   const [zoomed, setZoomed] = useState(false);
-  const pinnedRef = useRef(false);
   const fullRangeRef = useRef(fullRange);
   fullRangeRef.current = fullRange;
   const firstReset = useRef(true);
-  const unpinRef = useRef<() => void>(() => {});
   const onUnpinRef = useRef(onUnpin);
   onUnpinRef.current = onUnpin;
 
-  // 卸载时从全局注册表摘除，避免已销毁图表的 setState 泄漏。
+  // entry 只创建一次；持有的全是 ref / 稳定 setState，不存在过期闭包。
+  const entryRef = useRef<SyncGroupEntry | null>(null);
+  if (entryRef.current === null) {
+    entryRef.current = {
+      chart: null,
+      syncKey,
+      fullRangeRef,
+      setPinned,
+      setZoomed,
+      onUnpinRef,
+    };
+  }
+  const entry = entryRef.current;
+
+  // 挂载时注册进组并继承组内既有状态；卸载时摘除，避免已销毁图表的 setState 泄漏。
   useEffect(() => {
-    const unpin = () => {
-      pinnedChartUnpinners.delete(unpin);
-      if (!pinnedRef.current) return;
-      pinnedRef.current = false;
-      setPinned(false);
-      onUnpinRef.current?.();
-    };
-    unpinRef.current = unpin;
+    syncGroupCharts.add(entry);
+    setPinned(pinnedSyncGroups.has(syncKey));
     return () => {
-      pinnedChartUnpinners.delete(unpin);
+      syncGroupCharts.delete(entry);
+      entry.chart = null;
     };
-  }, []);
+  }, [entry, syncKey]);
 
-  const onCreate = useCallback((chart: uPlot) => {
-    chartRef.current = chart;
-    const over = chart.over;
+  const isGroupPinned = useCallback(() => pinnedSyncGroups.has(syncKey), [syncKey]);
 
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const scale = chart.scales.x;
-      if (scale.min == null || scale.max == null) return;
-      const rect = over.getBoundingClientRect();
-      const ratio = Math.min(
-        Math.max((event.clientX - rect.left) / rect.width, 0),
-        1,
-      );
-      const min = scale.min;
-      const max = scale.max;
-      const span = max - min;
-      const factor = event.deltaY > 0 ? 1.25 : 0.8;
-      let newMin = min + span * ratio * (1 - factor);
-      let newMax = max - span * (1 - ratio) * (1 - factor);
+  const onCreate = useCallback(
+    (chart: uPlot) => {
+      chartRef.current = chart;
+      entry.chart = chart;
+      const over = chart.over;
 
-      // 收敛到完整范围，避免缩出数据边界。
-      const full = fullRangeRef.current;
-      if (full) {
-        const [fullMin, fullMax] = full;
-        const fullSpan = fullMax - fullMin;
-        if (newMax - newMin >= fullSpan) {
-          newMin = fullMin;
-          newMax = fullMax;
-        } else {
-          if (newMin < fullMin) {
-            newMax += fullMin - newMin;
+      const onWheel = (event: WheelEvent) => {
+        event.preventDefault();
+        const scale = chart.scales.x;
+        if (scale.min == null || scale.max == null) return;
+        const rect = over.getBoundingClientRect();
+        const ratio = Math.min(
+          Math.max((event.clientX - rect.left) / rect.width, 0),
+          1,
+        );
+        const min = scale.min;
+        const max = scale.max;
+        const span = max - min;
+        const factor = event.deltaY > 0 ? 1.25 : 0.8;
+        let newMin = min + span * ratio * (1 - factor);
+        let newMax = max - span * (1 - ratio) * (1 - factor);
+
+        // 收敛到完整范围，避免缩出数据边界。
+        const full = fullRangeRef.current;
+        if (full) {
+          const [fullMin, fullMax] = full;
+          const fullSpan = fullMax - fullMin;
+          if (newMax - newMin >= fullSpan) {
             newMin = fullMin;
-          }
-          if (newMax > fullMax) {
-            newMin -= newMax - fullMax;
             newMax = fullMax;
+          } else {
+            if (newMin < fullMin) {
+              newMax += fullMin - newMin;
+              newMin = fullMin;
+            }
+            if (newMax > fullMax) {
+              newMin -= newMax - fullMax;
+              newMax = fullMax;
+            }
           }
         }
-      }
 
-      // 最小缩放窗口 60s，避免缩到单点无意义。
-      if (newMax - newMin < 60) return;
+        // 最小缩放窗口 60s，避免缩到单点无意义。
+        if (newMax - newMin < 60) return;
 
-      chart.setScale("x", { min: newMin, max: newMax });
-      const isFull = full != null && newMin <= full[0] + 0.5 && newMax >= full[1] - 0.5;
-      setZoomed(!isFull);
-    };
+        chart.setScale("x", { min: newMin, max: newMax });
+        const isFull = full != null && newMin <= full[0] + 0.5 && newMax >= full[1] - 0.5;
+        setZoomed(!isFull);
+        // 缩放整组联动：其余同组图表同步到相同 X 窗口。
+        broadcastXScale(syncKey, chart, newMin, newMax);
+      };
 
-    // uPlot 在 wrap 上以捕获阶段监听 click：只要按下到松开期间光标有过任何位移
-    //（真实点击几乎必然发生），就会走 drag.click 默认实现 stopImmediatePropagation，
-    // 把 click 事件整个吞掉，导致 over 上的 click 监听基本永远收不到事件。
-    // 因此改用 pointerdown/pointerup 自行检测 tap：位移小于阈值视为点击，切换固定。
-    // 该方案同时覆盖鼠标与触摸（移动端没有 hover，tap 是唯一入口）。
-    let downPointerId = -1;
-    let downX = 0;
-    let downY = 0;
-    const onPointerDown = (event: PointerEvent) => {
-      downPointerId = event.pointerId;
-      downX = event.clientX;
-      downY = event.clientY;
-    };
-    const onPointerUp = (event: PointerEvent) => {
-      if (event.pointerId !== downPointerId) return;
-      downPointerId = -1;
-      const dx = event.clientX - downX;
-      const dy = event.clientY - downY;
-      // 位移超过 8px 视为拖拽缩放，不触发固定切换。
-      if (dx * dx + dy * dy > 64) return;
+      // uPlot 在 wrap 上以捕获阶段监听 click：只要按下到松开期间光标有过任何位移
+      //（真实点击几乎必然发生），就会走 drag.click 默认实现 stopImmediatePropagation，
+      // 把 click 事件整个吞掉，导致 over 上的 click 监听基本永远收不到事件。
+      // 因此改用 pointerdown/pointerup 自行检测 tap：位移小于阈值视为点击，切换固定。
+      // 该方案同时覆盖鼠标与触摸（移动端没有 hover，tap 是唯一入口）。
+      let downPointerId = -1;
+      let downX = 0;
+      let downY = 0;
+      const onPointerDown = (event: PointerEvent) => {
+        downPointerId = event.pointerId;
+        downX = event.clientX;
+        downY = event.clientY;
+      };
+      const onPointerUp = (event: PointerEvent) => {
+        if (event.pointerId !== downPointerId) return;
+        downPointerId = -1;
+        const dx = event.clientX - downX;
+        const dy = event.clientY - downY;
+        // 位移超过 8px 视为拖拽缩放，不触发固定切换。
+        if (dx * dx + dy * dy > 64) return;
 
-      if (pinnedRef.current) {
-        unpinRef.current();
-        return;
-      }
-      // 先把光标落到 tap 位置并触发 tooltip 更新（此刻 pinnedRef 仍为 false，
-      // setCursor hook 才会排期渲染），再置为固定——桌面端光标本就在此处不受影响，
-      // 移动端则会在手指点按处直接弹出 tooltip。
-      const rect = over.getBoundingClientRect();
-      chart.setCursor({
-        left: event.clientX - rect.left,
-        top: event.clientY - rect.top,
-      });
-      pinnedRef.current = true;
-      setPinned(true);
-      registerPinnedChart(unpinRef.current);
-    };
+        if (pinnedSyncGroups.has(syncKey)) {
+          unpinSyncGroup(syncKey);
+          return;
+        }
+        // 先把光标落到 tap 位置。第三个参数 _pub=true 让 uPlot 内置 sync 把光标
+        // 广播给同组其余图表（它们会按同一时间点排期渲染各自 tooltip）；
+        // 此刻组还未固定，各图 setCursor hook 才会执行。随后再置整组固定。
+        // （uPlot 的 .d.ts 漏了第三个 _pub 参数，运行时支持，故断言绕过。）
+        const rect = over.getBoundingClientRect();
+        (
+          chart.setCursor as (
+            opts: { left: number; top: number },
+            fireHook?: boolean,
+            pub?: boolean,
+          ) => void
+        )(
+          {
+            left: event.clientX - rect.left,
+            top: event.clientY - rect.top,
+          },
+          true,
+          true,
+        );
+        pinnedSyncGroups.add(syncKey);
+        for (const other of syncGroupCharts) {
+          if (other.syncKey !== syncKey) continue;
+          other.setPinned(true);
+          // 锁定必须放在 setCursor 广播之后：广播时还要让 sync 光标抵达其余图表，
+          // 锁定后 mousemove/mouseleave 才无法再把十字线与点标记移离点选位置。
+          if (other.chart) setCursorLock(other.chart, true);
+        }
+      };
 
-    over.addEventListener("wheel", onWheel, { passive: false });
-    over.addEventListener("pointerdown", onPointerDown);
-    over.addEventListener("pointerup", onPointerUp);
+      over.addEventListener("wheel", onWheel, { passive: false });
+      over.addEventListener("pointerdown", onPointerDown);
+      over.addEventListener("pointerup", onPointerUp);
 
-    const originalDestroy = chart.destroy.bind(chart);
-    chart.destroy = () => {
-      over.removeEventListener("wheel", onWheel);
-      over.removeEventListener("pointerdown", onPointerDown);
-      over.removeEventListener("pointerup", onPointerUp);
-      pinnedChartUnpinners.delete(unpinRef.current);
-      pinnedRef.current = false;
-      setPinned(false);
-      setZoomed(false);
-      originalDestroy();
-    };
-  }, []);
+      const originalDestroy = chart.destroy.bind(chart);
+      chart.destroy = () => {
+        over.removeEventListener("wheel", onWheel);
+        over.removeEventListener("pointerdown", onPointerDown);
+        over.removeEventListener("pointerup", onPointerUp);
+        if (entry.chart === chart) entry.chart = null;
+        if (chartRef.current === chart) chartRef.current = null;
+        // 图表销毁（切换时间范围/主题重建等）后光标与数据都已重置，
+        // 同步解除整组固定，避免残留冻结在旧数据上的 tooltip。
+        unpinSyncGroup(syncKey);
+        setZoomed(false);
+        originalDestroy();
+      };
+    },
+    [entry, syncKey],
+  );
 
   const resetView = useCallback(() => {
-    unpinRef.current();
+    unpinSyncGroup(syncKey);
     setZoomed(false);
     const chart = chartRef.current;
     if (!chart) return;
     const full = fullRangeRef.current;
     if (full) {
       chart.setScale("x", { min: full[0], max: full[1] });
+      broadcastXScale(syncKey, chart, full[0], full[1]);
     } else {
       const times = chart.data[0];
       if (times && times.length > 1) {
-        chart.setScale("x", {
-          min: times[0] as number,
-          max: times[times.length - 1] as number,
-        });
+        const min = times[0] as number;
+        const max = times[times.length - 1] as number;
+        chart.setScale("x", { min, max });
+        broadcastXScale(syncKey, chart, min, max);
       }
     }
-  }, []);
+  }, [syncKey]);
 
   // 刷新按钮递增 resetSignal 触发重置；跳过首次挂载。
   useEffect(() => {
@@ -608,5 +684,5 @@ export function useChartInteractions({
     resetView();
   }, [resetSignal, resetView]);
 
-  return { onCreate, pinned, zoomed, pinnedRef, resetView };
+  return { onCreate, pinned, zoomed, isGroupPinned, resetView };
 }

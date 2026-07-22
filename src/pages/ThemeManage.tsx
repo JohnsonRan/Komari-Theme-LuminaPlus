@@ -736,7 +736,7 @@ export function ThemeManage() {
         aside={<LayoutGrid size={16} />}
       >
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+          <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
             <div>
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">
                 桌面端默认
@@ -761,7 +761,7 @@ export function ThemeManage() {
               ))}
             </div>
           </div>
-          <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+          <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
             <div>
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">
                 移动端默认
@@ -845,7 +845,7 @@ export function ThemeManage() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+            <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">缩放方式</div>
               <div className="instance-segmented is-scrollable">
                 {BACKGROUND_SIZE_OPTIONS.map(({ value, label }) => (
@@ -861,7 +861,7 @@ export function ThemeManage() {
                 ))}
               </div>
             </div>
-            <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+            <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">对齐位置</div>
               <div className="instance-segmented is-scrollable">
                 {BACKGROUND_POSITION_OPTIONS.map(({ value, label }) => (
@@ -1467,7 +1467,7 @@ export function ThemeManage() {
         aside={<Gauge size={16} />}
       >
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+          <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
             <div>
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">
                 内存 / 磁盘图表
@@ -1495,7 +1495,7 @@ export function ThemeManage() {
               </button>
             </div>
           </div>
-          <div className="surface-inset flex flex-col gap-3 px-4 py-4">
+          <div className="surface-inset flex min-w-0 flex-col gap-3 px-4 py-4">
             <div>
               <div className="text-[13px] font-semibold text-[var(--text-primary)]">
                 实时网速单位

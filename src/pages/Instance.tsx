@@ -119,9 +119,8 @@ export function Instance() {
         : null;
     return (
       <div className="flex flex-col gap-5 py-2">
-        <Link to="/" className="instance-page-back">
-          <ChevronLeft size={14} />
-          返回
+        <Link to="/" className="instance-page-back" aria-label="返回">
+          <ChevronLeft size={14} aria-hidden />
         </Link>
         <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
           {message ? (
@@ -146,9 +145,8 @@ export function Instance() {
       {/* 吸顶栏：返回 + 节点标题 + 快速切换始终悬浮，滚动查看图表时不丢失上下文。
           桌面分栏模式下切换器由 CSS 隐藏（侧栏已提供切换）。 */}
       <div className="instance-page-sticky-bar">
-        <Link to="/" className="instance-page-back">
-          <ChevronLeft size={14} />
-          返回
+        <Link to="/" className="instance-page-back" aria-label="返回">
+          <ChevronLeft size={14} aria-hidden />
         </Link>
         <h1 className="instance-page-title">{pageTitle}</h1>
         <InstanceSwitcher currentUuid={uuid} />

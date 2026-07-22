@@ -289,10 +289,24 @@ export function PingChart({
     setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
     setLossTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
   }, []);
-  // 两条图（延迟/丢包）共享同一套交互状态：光标同步 + 同一刷新按钮重置。
-  const { onCreate, pinned, zoomed, pinnedRef } = useChartInteractions({
+  // 两条图（延迟/丢包）各自注册进同一个 ping-sync 组：光标同步靠 uPlot 内置 sync，
+  // 固定/缩放同步靠分组注册表。两图需各自独立的交互实例（各持有自己的 chart
+  // 实例），缩放广播才能分别命中两图；固定/缩放状态则整组共享。
+  const {
+    onCreate: latencyOnCreate,
+    pinned,
+    zoomed,
+    isGroupPinned,
+  } = useChartInteractions({
     fullRange: requestedXRange,
     resetSignal,
+    syncKey: "ping-sync",
+    onUnpin: hideAllTooltips,
+  });
+  const { onCreate: lossOnCreate } = useChartInteractions({
+    fullRange: requestedXRange,
+    resetSignal,
+    syncKey: "ping-sync",
     onUnpin: hideAllTooltips,
   });
   const coverageMeta = useMemo(() => {
@@ -350,7 +364,7 @@ export function PingChart({
       rangeHours: hours,
       estimatedWidth: 196,
       setTooltip,
-      pinnedRef,
+      isPinned: isGroupPinned,
       buildRows: (idx) =>
         visibleTasks
           .map((task) => {
@@ -426,7 +440,7 @@ export function PingChart({
         setCursor: [tooltipHooks.onSetCursor],
       },
     };
-  }, [chart, connectNulls, hiddenTasks, hours, isDark, pinnedRef, requestedXRange, taskColors, taskIndexById, taskLabels, tasks, visibleTasks, yRange]);
+  }, [chart, connectNulls, hiddenTasks, hours, isDark, isGroupPinned, requestedXRange, taskColors, taskIndexById, taskLabels, tasks, visibleTasks, yRange]);
 
   const options = useMemo<uPlot.Options | null>(
     () => (baseOptions ? { ...baseOptions, width: w, height: h } : null),
@@ -459,7 +473,7 @@ export function PingChart({
       rangeHours: hours,
       estimatedWidth: 176,
       setTooltip: setLossTooltip,
-      pinnedRef,
+      isPinned: isGroupPinned,
       buildRows: (idx) =>
         visibleTasks
           .map((task) => {
@@ -534,7 +548,7 @@ export function PingChart({
         setCursor: [tooltipHooks.onSetCursor],
       },
     };
-  }, [chart, connectNulls, hiddenTasks, hours, isDark, lossYRange, pinnedRef, requestedXRange, taskColors, taskIndexById, taskLabels, tasks, visibleTasks]);
+  }, [chart, connectNulls, hiddenTasks, hours, isDark, lossYRange, isGroupPinned, requestedXRange, taskColors, taskIndexById, taskLabels, tasks, visibleTasks]);
 
   const lossOptions = useMemo<uPlot.Options | null>(
     () => (lossBaseOptions ? { ...lossBaseOptions, width: lossW, height: lossH } : null),
@@ -741,7 +755,7 @@ export function PingChart({
               options={options}
               data={chart.latency}
               resetScales={false}
-              onCreate={onCreate}
+              onCreate={latencyOnCreate}
             />
             <ChartTooltip tooltip={tooltip} />
           </>
@@ -761,7 +775,7 @@ export function PingChart({
               options={lossOptions}
               data={chart.loss}
               resetScales={false}
-              onCreate={onCreate}
+              onCreate={lossOnCreate}
             />
             <ChartTooltip tooltip={lossTooltip} />
           </>
