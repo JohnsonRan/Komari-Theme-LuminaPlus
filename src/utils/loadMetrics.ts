@@ -111,12 +111,11 @@ export function mergeLoadMetricSeries(series: LoadMetricSeries[]): LoadRecord[] 
   for (const [key, fieldMap] of gpuAccum) {
     const record = records.get(key);
     if (!record) continue;
+    const rec = record as unknown as Record<string, number>;
     for (const [field, acc] of fieldMap) {
-      if (GPU_SUM_FIELDS.has(field)) {
-        (record as Record<string, number>)[field] = acc.sum;
-      } else {
-        (record as Record<string, number>)[field] = acc.count > 0 ? acc.sum / acc.count : 0;
-      }
+      rec[field] = GPU_SUM_FIELDS.has(field)
+        ? acc.sum
+        : acc.count > 0 ? acc.sum / acc.count : 0;
     }
   }
 
