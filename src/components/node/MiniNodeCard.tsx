@@ -19,6 +19,7 @@ import { useNodeCardModel } from "@/hooks/useNodeCardModel";
 import { usePreferences } from "@/hooks/usePreferences";
 import { latencyHeatColor, lossHeatColor, speedRateColor } from "@/utils/metricTone";
 import { joinTagTitle, nodeDetailLinkLabels, pingEmptyLabels } from "./nodeCardShared";
+import { formatPingHourStatsTitle } from "./pingBucketText";
 import { formatBytes, type ByteRateDisplay } from "@/utils/format";
 import type { NodeInfo, NodeMetrics, PingOverviewItem, PingOverviewBucket } from "@/types/komari";
 
@@ -316,6 +317,7 @@ const MiniHealth = memo(function MiniHealth({
   hasHomepagePingBinding: boolean;
 }) {
   const { text: emptyText } = pingEmptyLabels(hasHomepagePingBinding);
+  const hourStatsTitle = formatPingHourStatsTitle(ping);
   return (
     <div className="mini-node-health">
       <div className="mini-node-health-item">
@@ -324,7 +326,11 @@ const MiniHealth = memo(function MiniHealth({
             <Clock3 size={12} strokeWidth={2} />
             延迟
           </span>
-          <strong className="mini-node-health-value tabular" style={{ color: latencyColor }}>
+          <strong
+            className="mini-node-health-value tabular"
+            style={{ color: latencyColor }}
+            title={hourStatsTitle ?? undefined}
+          >
             {ping.lastValue != null ? (
               <>
                 {Math.round(ping.lastValue)}

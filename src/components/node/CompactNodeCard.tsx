@@ -27,7 +27,7 @@ import {
   speedRateColor,
   speedRateColorFromBytes,
 } from "@/utils/metricTone";
-import { formatHealthBucketTooltip } from "./pingBucketText";
+import { formatHealthBucketTooltip, formatPingHourStatsTitle } from "./pingBucketText";
 import {
   formatCompactExpire,
   formatCompactPercent,
@@ -311,6 +311,7 @@ function CompactHealthItem({
   value,
   unit,
   color,
+  title,
   children,
 }: {
   icon: ReactNode;
@@ -318,6 +319,7 @@ function CompactHealthItem({
   value: string;
   unit?: string;
   color: string;
+  title?: string;
   children: ReactNode;
 }) {
   return (
@@ -327,7 +329,7 @@ function CompactHealthItem({
           {icon}
           {label}
         </span>
-        <strong className="compact-node-health-value tabular" style={{ color }}>
+        <strong className="compact-node-health-value tabular" style={{ color }} title={title}>
           {value}
           {unit && <small>{unit}</small>}
         </strong>
@@ -636,6 +638,7 @@ const CompactNodeHealth = memo(function CompactNodeHealth({
 }) {
   // 已绑定但无样本时显示"无样本",未绑定时显示"未配置" —— 见 pingEmptyLabels。
   const { text: emptyText } = pingEmptyLabels(hasHomepagePingBinding);
+  const hourStatsTitle = formatPingHourStatsTitle(ping);
   return (
     <div className="compact-node-bottom">
       <CompactHealthItem
@@ -644,6 +647,7 @@ const CompactNodeHealth = memo(function CompactNodeHealth({
         value={ping.lastValue != null ? Math.round(ping.lastValue).toString() : emptyText}
         unit={ping.lastValue != null ? "ms" : undefined}
         color={latencyColor}
+        title={hourStatsTitle ?? undefined}
       >
         <HealthBars buckets={pingBuckets} max={ping.max} kind="latency" />
       </CompactHealthItem>

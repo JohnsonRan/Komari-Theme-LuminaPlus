@@ -8,7 +8,7 @@ const DEBOUNCE_MS = 300;
 /**
  * 页面切换时向后端上报访客事件（fire-and-forget）。
  * 仅在后端 record_enabled 为 true 时激活，尊重管理员开关。
- * 不采集任何用户标识，仅上报 path + type。
+ * 不采集任何用户标识，仅上报 path + event（referrer 放入 detail）。
  */
 export function useVisitorTracking() {
   const { pathname } = useLocation();
@@ -28,9 +28,9 @@ export function useVisitorTracking() {
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       recordVisitorEvent({
-        type: "pageview",
+        event: "pageview",
         path: pathname,
-        referrer: document.referrer || undefined,
+        detail: document.referrer ? { referrer: document.referrer } : undefined,
       });
     }, DEBOUNCE_MS);
 

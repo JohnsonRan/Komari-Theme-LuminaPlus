@@ -106,8 +106,9 @@ export interface NodeRealtime {
   uptime: number;
   process: number;
   updated_at?: string | number;
-  /** 后端 getNodesLatestStatus 内嵌的每任务实时 ping 统计。键为 taskId 字符串。 */
-  ping?: Record<string, { latest: number; loss: number }>;
+  /** 后端 getNodesLatestStatus 内嵌的每任务实时 ping 统计。键为 taskId 字符串。
+   *  avg/min/max 为后端缓存的最近 1 小时统计，旧后端可能不下发。 */
+  ping?: Record<string, { latest: number; loss: number; avg?: number; min?: number; max?: number }>;
 }
 
 /** 展示用模型:扁平化的节点信息 + 实时指标 + 在线标志。 */
@@ -138,6 +139,12 @@ export interface NodeMetrics {
   pingLatest: number | null;
   /** 内嵌 ping 实时丢包率 (%)，无数据时为 null。 */
   pingLoss: number | null;
+  /** 内嵌 ping 近 1 小时平均延迟 (ms)，后端未下发时为 null。 */
+  pingAvg: number | null;
+  /** 内嵌 ping 近 1 小时最低延迟 (ms)，后端未下发时为 null。 */
+  pingMin: number | null;
+  /** 内嵌 ping 近 1 小时最高延迟 (ms)，后端未下发时为 null。 */
+  pingMax: number | null;
   /** GPU 使用率 (%)，无 GPU 或未上报时为 0。 */
   gpuPct: number;
   /** GPU 显存已用 (bytes)，无 GPU 或未上报时为 0。 */
@@ -399,6 +406,12 @@ export interface PingOverviewItem {
   }>;
   max: number;
   loss: number | null;
+  /** 实时通道下发的近 1 小时平均延迟 (ms)，仅首页卡片合并实时数据后存在。 */
+  avg?: number | null;
+  /** 实时通道下发的近 1 小时最低延迟 (ms)。 */
+  min?: number | null;
+  /** 实时通道下发的近 1 小时最高延迟 (ms)。与图表量程 max 区分，故名 peak。 */
+  peak?: number | null;
 }
 
 export interface TrafficTrendSample {

@@ -44,6 +44,7 @@ import {
   formatLatencyBucketSummary,
   formatLossBucketSummary,
   formatPingBucketWindow,
+  formatPingHourStatsTitle,
 } from "./pingBucketText";
 import { clsx } from "clsx";
 import type { NodeInfo, NodeMetrics, PingOverviewBucket, PingOverviewItem, TrafficTrendSample } from "@/types/komari";
@@ -486,6 +487,7 @@ const NodeHealthSection = memo(function NodeHealthSection({
   onLossHover: (index: number | null) => void;
 }) {
   const { title: emptyTitle, text: emptyText } = pingEmptyLabels(hasHomepagePingBinding);
+  const hourStatsTitle = formatPingHourStatsTitle(ping);
 
   return (
     <div className="card-metric-section card-metric-divided server-health-grid">
@@ -495,7 +497,11 @@ const NodeHealthSection = memo(function NodeHealthSection({
             <Clock3 size={13} strokeWidth={2} />
             <span>延迟</span>
           </div>
-          <span className="server-health-value tabular" style={{ color: latencyColor }}>
+          <span
+            className="server-health-value tabular"
+            style={{ color: latencyColor }}
+            title={hourStatsTitle ?? undefined}
+          >
             {ping.lastValue != null ? (
               <>
                 {Math.round(ping.lastValue)}

@@ -81,8 +81,12 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       ...ping,
       lastValue: latest ?? ping.lastValue,
       loss: loss ?? ping.loss,
+      // 后端缓存的近 1 小时统计（avg/min/peak）：实时帧未下发时保留 overview 原值。
+      avg: metrics.pingAvg ?? ping.avg,
+      min: metrics.pingMin ?? ping.min,
+      peak: metrics.pingMax ?? ping.peak,
     };
-  }, [ping, metrics?.pingLatest, metrics?.pingLoss]);
+  }, [ping, metrics?.pingLatest, metrics?.pingLoss, metrics?.pingAvg, metrics?.pingMin, metrics?.pingMax]);
 
   // ping 派生的颜色只在解析后的 ping 值变化时才变。
   const pingModel = useMemo(

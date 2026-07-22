@@ -1,5 +1,5 @@
 import type { NodeInfo, NodeMetrics, NodeRealtime, TrafficTrendSample } from "@/types/komari";
-import { getNodes, getNodesLatestStatus } from "@/services/api";
+import { getNodes } from "@/services/api";
 
 type Listener = () => void;
 type RealtimePayload = Record<string, unknown>;
@@ -52,14 +52,11 @@ interface NodeTrafficTrend {
 
 const LIVE_STATUS_REFRESH_INTERVAL_MS = 2_000;
 const NODE_INFO_REFRESH_INTERVAL_MS = 30_000;
-// 较短超时可让 half-open 连接尽快重试。
-const LIVE_STATUS_REQUEST_TIMEOUT_MS = 8_000;
-const SCROLL_IDLE_DELAY_MS = 160;
-// 用户无交互超过此阈值时，实时指标轮询降频以节省 CPU / 电量。
+// 用户无交互超过此阈值时，调度 tick 降频以节省 CPU / 电量。
 const IDLE_THRESHOLD_MS = 120_000;
 const IDLE_REFRESH_INTERVAL_MS = 10_000;
 const IDLE_NODE_INFO_INTERVAL_MS = 60_000;
-// WebSocket 实时通道（同默认主题 /api/clients），RPC 轮询仅作降级兜底。
+// WebSocket 实时通道（同默认主题 /api/clients）是实时数据的唯一来源，不作 RPC 降级。
 const WS_RECONNECT_DELAY_MS = 3_000;
 const WS_FRESH_THRESHOLD_MS = 8_000;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
@@ -125,6 +122,9 @@ function emptyMetrics(info: NodeInfo, online: boolean | null): NodeMetrics {
     updatedAt: 0,
     pingLatest: null,
     pingLoss: null,
+    pingAvg: null,
+    pingMin: null,
+    pingMax: null,
     gpuPct: 0,
     gpuMemUsed: 0,
     gpuMemTotal: 0,
@@ -191,9 +191,12 @@ function mergeRealtime(
     rt.network?.totalDown ?? 0,
   );
 
-  // 从内嵌 ping map 中提取当前绑定任务的实时延迟/丢包。
+  // 从内嵌 ping map 中提取当前绑定任务的实时延迟/丢包，以及后端缓存的近 1 小时统计。
   let pingLatest: number | null = null;
   let pingLoss: number | null = null;
+  let pingAvg: number | null = null;
+  let pingMin: number | null = null;
+  let pingMax: number | null = null;
   if (rt.ping) {
     const boundTaskId = pingBindingResolver?.(uuid);
     const entry = boundTaskId != null
@@ -202,6 +205,9 @@ function mergeRealtime(
     if (entry) {
       pingLatest = Number.isFinite(entry.latest) ? entry.latest : null;
       pingLoss = Number.isFinite(entry.loss) ? entry.loss : null;
+      pingAvg = typeof entry.avg === "number" && Number.isFinite(entry.avg) ? entry.avg : null;
+      pingMin = typeof entry.min === "number" && Number.isFinite(entry.min) ? entry.min : null;
+      pingMax = typeof entry.max === "number" && Number.isFinite(entry.max) ? entry.max : null;
     }
   }
 
@@ -230,8 +236,10 @@ function mergeRealtime(
     updatedAt: updatedAt > 0 ? updatedAt : metrics.updatedAt,
     pingLatest,
     pingLoss,
-    // RPC（getNodesLatestStatus）硬编码 gpu=0，不携带 GPU 数据；
-    // WS 通道提供 GPU 后，后续 RPC 帧不应将其冲零。
+    pingAvg,
+    pingMin,
+    pingMax,
+    // WS 帧未携带 GPU 字段时保留上一帧的值，避免偶发缺样导致 GPU 指标闪零。
     gpuPct: rt.gpu?.usage ?? metrics.gpuPct,
     gpuMemUsed: rt.gpu?.memoryUsed ?? metrics.gpuMemUsed,
     gpuMemTotal: rt.gpu?.memoryTotal ?? metrics.gpuMemTotal,
@@ -265,6 +273,9 @@ function shallowEqualMetrics(a: NodeMetrics, b: NodeMetrics) {
     a.updatedAt === b.updatedAt &&
     a.pingLatest === b.pingLatest &&
     a.pingLoss === b.pingLoss &&
+    a.pingAvg === b.pingAvg &&
+    a.pingMin === b.pingMin &&
+    a.pingMax === b.pingMax &&
     a.gpuPct === b.gpuPct &&
     a.gpuMemUsed === b.gpuMemUsed &&
     a.gpuMemTotal === b.gpuMemTotal &&
@@ -417,10 +428,6 @@ let storeStatusSnapshot: StoreStatusSnapshot = {
   hydrated: false,
   nodeInfoError: false,
 };
-let scrollIdleTimer: number | null = null;
-let scrollTrackingStarted = false;
-let scrollActive = false;
-let refreshDeferredWhileScrolling = false;
 let ws: WebSocket | null = null;
 let wsGetTimer: number | null = null;
 let wsReconnectTimer: number | null = null;
@@ -477,27 +484,6 @@ function commit(next: State, touches: CommitTouches = {}) {
   if (touches.trafficTrends) emitMappedListeners(trafficTrendListeners, touches.trafficTrends);
 }
 
-function markScrollActivity() {
-  scrollActive = true;
-  if (scrollIdleTimer != null) {
-    window.clearTimeout(scrollIdleTimer);
-  }
-  scrollIdleTimer = window.setTimeout(() => {
-    scrollIdleTimer = null;
-    scrollActive = false;
-    if (refreshDeferredWhileScrolling) {
-      refreshDeferredWhileScrolling = false;
-      void refreshLatestStatus();
-    }
-  }, SCROLL_IDLE_DELAY_MS);
-}
-
-function ensureScrollTrackingStarted() {
-  if (scrollTrackingStarted) return;
-  scrollTrackingStarted = true;
-  window.addEventListener("scroll", markScrollActivity, { passive: true });
-}
-
 function asNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -511,24 +497,6 @@ function asRecord(value: unknown): RealtimePayload {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as RealtimePayload)
     : {};
-}
-
-function asBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "" || normalized === "0" || normalized === "false") return false;
-    if (normalized === "1" || normalized === "true") return true;
-  }
-  return fallback;
-}
-
-function resolveOnline(rawRecord: unknown): boolean {
-  if (rawRecord == null) return false;
-  if (typeof rawRecord === "boolean") return rawRecord;
-  const record = asRecord(rawRecord);
-  return asBoolean(record.online, Object.keys(record).length > 0);
 }
 
 function toTimestamp(value: string | number | undefined): number {
@@ -705,108 +673,39 @@ function normalizeRealtime(
   };
 }
 
-/** 解析后端内嵌的 ping 字段：Record<taskId, { latest, loss, ... }> */
+/** 解析后端内嵌的 ping 字段：Record<taskId, { latest, loss, avg, min, max, ... }>。
+ *  avg/min/max 为后端缓存的近 1 小时统计（旧后端不下发时为 undefined）。 */
 function parseEmbeddedPing(
   raw: unknown,
-): Record<string, { latest: number; loss: number }> | undefined {
+): Record<string, { latest: number; loss: number; avg?: number; min?: number; max?: number }> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const map = raw as Record<string, unknown>;
   const keys = Object.keys(map);
   if (keys.length === 0) return undefined;
-  const result: Record<string, { latest: number; loss: number }> = {};
+  // 负值视为无效（全部丢包时后端可能返回 -1）；NaN 由下游 Number.isFinite 收敛为 null。
+  const toStat = (value: unknown) => {
+    const n = asNumber(value, -1);
+    return n >= 0 ? n : NaN;
+  };
+  const result: Record<string, { latest: number; loss: number; avg?: number; min?: number; max?: number }> = {};
   for (const key of keys) {
     const entry = map[key];
     if (!entry || typeof entry !== "object") continue;
     const rec = entry as Record<string, unknown>;
-    const latest = asNumber(rec.latest, -1);
-    const loss = asNumber(rec.loss, -1);
-    // latest < 0 表示无有效值（全部丢包时后端可能返回 -1）。
     result[key] = {
-      latest: latest >= 0 ? latest : NaN,
-      loss: loss >= 0 ? loss : NaN,
+      latest: toStat(rec.latest),
+      loss: toStat(rec.loss),
+      avg: toStat(rec.avg),
+      min: toStat(rec.min),
+      max: toStat(rec.max),
     };
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function applyLatestStatus(records: Record<string, unknown>) {
-  const touchedMetrics = new Set<string>();
-  const touchedTrafficTrends = new Set<string>();
-  // 安静 tick 不克隆整个索引。
-  let nextMetricsByUuid = state.metricsByUuid;
-  let nextTrafficTrends = state.trafficTrends;
-
-  for (const uuid of state.order) {
-    const meta = state.metaByUuid[uuid];
-    const prev = state.metricsByUuid[uuid];
-    if (!meta || !prev) continue;
-    const rawRecord = records[uuid];
-    const online = resolveOnline(rawRecord);
-    const realtime = normalizeRealtime(rawRecord, meta, prev);
-    const merged = realtime
-      ? mergeRealtime(prev, realtime, online, uuid)
-      : { ...prev, online };
-
-    if (!shallowEqualMetrics(prev, merged)) {
-      if (nextMetricsByUuid === state.metricsByUuid) {
-        nextMetricsByUuid = { ...state.metricsByUuid };
-      }
-      nextMetricsByUuid[uuid] = merged;
-      touchedMetrics.add(uuid);
-    }
-
-    const prevTrend = state.trafficTrends[uuid] ?? EMPTY_TRAFFIC_TREND;
-    const nextUp = updateTrafficTrendSeries(
-      prevTrend.up,
-      merged.netUp,
-      merged.updatedAt,
-      merged.online,
-    );
-    const nextDown = updateTrafficTrendSeries(
-      prevTrend.down,
-      merged.netDown,
-      merged.updatedAt,
-      merged.online,
-    );
-
-    if (nextUp.changed || nextDown.changed) {
-      if (nextTrafficTrends === state.trafficTrends) {
-        nextTrafficTrends = { ...state.trafficTrends };
-      }
-      nextTrafficTrends[uuid] = {
-        up: nextUp.series,
-        down: nextDown.series,
-        snapshot: {
-          up: nextUp.series.snapshot,
-          down: nextDown.series.snapshot,
-        },
-      };
-      touchedTrafficTrends.add(uuid);
-    }
-  }
-
-  return {
-    nextMetricsByUuid,
-    nextTrafficTrends,
-    touchedMetrics: [...touchedMetrics],
-    touchedTrafficTrends: [...touchedTrafficTrends],
-  };
-}
-
 // ─── WebSocket 实时通道 ───────────────────────────────────────────────────────
 // 与默认主题相同，通过 /api/clients WebSocket 获取完整 v1.Report（含 GPU）。
-// RPC 轮询仅在 WS 不可用时作为降级路径。
-
-function isMockMode(): boolean {
-  try {
-    return (
-      import.meta.env.DEV &&
-      new URLSearchParams(window.location.search).get("mock") === "1"
-    );
-  } catch {
-    return false;
-  }
-}
+// 这是实时数据的唯一来源，不作 RPC 降级。
 
 function wsIsFresh(): boolean {
   return wsLastMessageAt > 0 && Date.now() - wsLastMessageAt < WS_FRESH_THRESHOLD_MS;
@@ -913,8 +812,20 @@ function stopWsConnection() {
   }
 }
 
+/** WS 已连接时立即请求一帧（用于节点信息就绪后马上拿数据，不等下一个 2s "get"）。 */
+function requestWsFrame() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send("get");
+}
+
+/** 强制断开并重连（看门狗检测到 half-open 假死连接时使用）。 */
+function restartWsConnection() {
+  stopWsConnection();
+  wsLastMessageAt = 0;
+  startWsConnection();
+}
+
 function startWsConnection() {
-  if (ws || wsReconnectTimer != null || isMockMode()) return;
+  if (ws || wsReconnectTimer != null) return;
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   let socket: WebSocket;
@@ -927,6 +838,10 @@ function startWsConnection() {
 
   socket.onopen = () => {
     wsLastMessageAt = Date.now();
+    // 连接建立/恢复：清空失败计数，撤销同步告警。
+    if (state.failureStreak > 0) {
+      commit({ ...state, failureStreak: 0 }, { storeStatus: true });
+    }
     socket.send("get");
     wsGetTimer = window.setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) socket.send("get");
@@ -949,7 +864,9 @@ function startWsConnection() {
       wsGetTimer = null;
     }
     if (ws === socket) ws = null;
-    if (started && !pageHidden && !isMockMode()) {
+    // 非主动关闭（stopWsConnection 会先摘掉回调）：记一次失败，驱动同步告警。
+    commit({ ...state, failureStreak: state.failureStreak + 1 }, { storeStatus: true });
+    if (started && !pageHidden) {
       wsReconnectTimer = window.setTimeout(() => {
         wsReconnectTimer = null;
         startWsConnection();
@@ -960,9 +877,7 @@ function startWsConnection() {
 
 let hydrated = false;
 let nodeInfoError = false;
-let refreshInFlight = false;
 let nodeInfoPromise: Promise<void> | null = null;
-let liveStatusController: AbortController | null = null;
 let nodeInfoController: AbortController | null = null;
 
 function sortNodes(nodes: NodeInfo[]) {
@@ -1045,7 +960,7 @@ async function performNodeInfoSync() {
         {
           meta: touchedMeta,
           metrics: touchedMetrics,
-          // traffic trend 只由 refreshLatestStatus 改动;syncNodeInfo 原样带过来,这里无需通知。
+          // traffic trend 只由 WS 帧改动；syncNodeInfo 原样带过来，这里无需通知。
           nodeList: nodeListChanged,
           allNodes: orderChanged || touchedMeta.size > 0,
           storeStatus: storeStatusChanged,
@@ -1063,62 +978,11 @@ async function performNodeInfoSync() {
   }
 }
 
-async function refreshLatestStatus() {
-  if (refreshInFlight || state.order.length === 0) return;
-  if (scrollActive) {
-    refreshDeferredWhileScrolling = true;
-    return;
-  }
-
-  refreshInFlight = true;
-  const controller = new AbortController();
-  liveStatusController = controller;
-  try {
-    const records = await getNodesLatestStatus([...state.order], {
-      timeout: LIVE_STATUS_REQUEST_TIMEOUT_MS,
-      signal: controller.signal,
-    });
-    if (controller.signal.aborted) return;
-    const applied = applyLatestStatus(records);
-    const metricsChanged = applied.touchedMetrics.length > 0;
-    const trafficTrendsChanged = applied.touchedTrafficTrends.length > 0;
-    const storeStatusChanged = state.failureStreak > 0;
-
-    if (metricsChanged || trafficTrendsChanged || storeStatusChanged) {
-      commit(
-        {
-          ...state,
-          metricsByUuid: metricsChanged ? applied.nextMetricsByUuid : state.metricsByUuid,
-          trafficTrends:
-            trafficTrendsChanged ? applied.nextTrafficTrends : state.trafficTrends,
-          failureStreak: 0,
-        },
-        {
-          metrics: applied.touchedMetrics,
-          trafficTrends: applied.touchedTrafficTrends,
-          storeStatus: storeStatusChanged,
-        },
-      );
-    }
-  } catch {
-    if (controller.signal.aborted) return;
-    commit(
-      {
-        ...state,
-        failureStreak: state.failureStreak + 1,
-      },
-      { storeStatus: true },
-    );
-  } finally {
-    if (liveStatusController === controller) liveStatusController = null;
-    refreshInFlight = false;
-  }
-}
-
 async function bootstrap() {
   try {
     await syncNodeInfo();
-    await refreshLatestStatus();
+    // 节点信息就绪后立即向 WS 要一帧，避免等下一个 2s "get"。
+    requestWsFrame();
   } catch {
     // 下一个调度 tick 再重试。
   }
@@ -1180,9 +1044,9 @@ function scheduleLiveStatusTick() {
     if (pageHidden || !started) return;
     if (!hydrated) {
       void bootstrap();
-    } else if (!wsIsFresh()) {
-      // WS 通道健康时跳过 RPC 轮询（WS 已提供全量实时数据含 GPU）。
-      void refreshLatestStatus();
+    } else if (ws != null && ws.readyState === WebSocket.OPEN && !wsIsFresh()) {
+      // WS 已连接但长时间无数据（half-open 假死）：强制重连而非降级 RPC。
+      restartWsConnection();
     }
     scheduleLiveStatusTick();
   }, getEffectiveLiveInterval());
@@ -1216,13 +1080,11 @@ function handleVisibilityChange() {
     }
     stopWsConnection();
   } else {
-    // 页面恢复可见：立即刷新一次，然后恢复正常调度。
+    // 页面恢复可见：重连 WS 并恢复正常调度（WS 是唯一实时数据源）。
     markUserInteraction();
     if (started) {
       if (!hydrated) {
         void bootstrap();
-      } else {
-        void refreshLatestStatus();
       }
       startWsConnection();
       scheduleLiveStatusTick();
@@ -1235,7 +1097,6 @@ function ensureStarted() {
   if (started) return;
   started = true;
 
-  ensureScrollTrackingStarted();
   ensureIdleTrackingStarted();
   document.addEventListener("visibilitychange", handleVisibilityChange);
   pageHidden = document.hidden;
@@ -1274,8 +1135,6 @@ function stopStore() {
     window.clearTimeout(stopTimer);
     stopTimer = null;
   }
-  liveStatusController?.abort();
-  liveStatusController = null;
   nodeInfoController?.abort();
   nodeInfoController = null;
   stopWsConnection();
@@ -1288,18 +1147,8 @@ function stopStore() {
     window.clearTimeout(nodeInfoTimer);
     nodeInfoTimer = null;
   }
-  if (scrollIdleTimer != null) {
-    window.clearTimeout(scrollIdleTimer);
-    scrollIdleTimer = null;
-  }
-  if (scrollTrackingStarted) {
-    window.removeEventListener("scroll", markScrollActivity);
-    scrollTrackingStarted = false;
-  }
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   stopIdleTracking();
-  scrollActive = false;
-  refreshDeferredWhileScrolling = false;
   hydrated = false;
   nodeInfoError = false;
   started = false;

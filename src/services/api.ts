@@ -162,21 +162,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-function normalizeRpcLatestStatus(
-  payload: unknown,
-): Record<string, unknown> {
-  // 热路径（每 2s 轮询）用轻量 typeof 检查代替 Zod 校验，减少 CPU 开销。
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const obj = payload as Record<string, unknown>;
-    const maybeRecords = obj.records;
-    if (maybeRecords && typeof maybeRecords === "object" && !Array.isArray(maybeRecords)) {
-      return maybeRecords as Record<string, unknown>;
-    }
-    return obj;
-  }
-  return {};
-}
-
 function getRecordsMaxCount(hours: number, recordsPerHour: number) {
   const safeHours = Number.isFinite(hours) && hours > 0 ? hours : 1;
   return Math.min(
@@ -653,19 +638,6 @@ export async function getPublic(options?: ApiCallOptions): Promise<PublicConfig>
   return (await apiGet("/api/public", PublicConfigSchema, options)) as PublicConfig;
 }
 
-export async function getNodesLatestStatus(
-  uuids?: string[],
-  options?: { timeout?: number; signal?: AbortSignal },
-): Promise<Record<string, unknown>> {
-  const payload = await rpcCall(
-    "common:getNodesLatestStatus",
-    uuids && uuids.length > 0 ? { uuids } : {},
-    z.unknown(),
-    options,
-  );
-  return normalizeRpcLatestStatus(payload);
-}
-
 export async function getNodes(options?: ApiCallOptions): Promise<NodeInfo[]> {
   // 走 common:getNodes（RPC2）：它按 SendIpAddrToGuest 设置下发 ipv4/ipv6（管理员全量 /
   // 访客打码），所以前端能显示 V4/V6；/api/nodes 则永远抹掉 IP，拿不到。
@@ -878,7 +850,8 @@ export async function getPingMetricStats(
 }
 
 export async function getAdminPingTasks(options?: ApiCallOptions): Promise<PingTask[]> {
-  return (await apiGet("/api/admin/ping", z.array(PingTaskSchema), options)) as PingTask[];
+  // 后端注册为 GET /api/admin/ping/（group + "/"）；不带尾斜杠会多一次 301 重定向。
+  return (await apiGet("/api/admin/ping/", z.array(PingTaskSchema), options)) as PingTask[];
 }
 
 export async function saveThemeSettings(
@@ -996,9 +969,11 @@ export async function getVersion(
 // ─── 访客事件上报 ─────────────────────────────────────────────────────────────
 
 export function recordVisitorEvent(event: {
-  type: string;
-  path: string;
-  referrer?: string;
+  event: string;
+  path?: string;
+  route?: string;
+  target?: string;
+  detail?: Record<string, unknown>;
 }): void {
   // fire-and-forget：不阻塞 UI，失败静默。
   void rpcCall("public:recordVisitorEvent", event as unknown as Record<string, unknown>, z.unknown()).catch(

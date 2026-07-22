@@ -238,7 +238,17 @@ function latestStatus() {
           connections: 180 + index * 44,
           connections_udp: 12 + index * 3,
           updated_at: now,
-          mock_ping: ping,
+          // 内嵌 ping 统计（键为 taskId 字符串，与 pingTask.id 对应），
+          // 与生产 WS 帧的 v1.Report 结构一致。
+          ping: {
+            "1": {
+              latest: ping,
+              loss: 0,
+              avg: Math.round(ping * 1.12),
+              min: Math.max(1, Math.round(ping * 0.72)),
+              max: Math.round(ping * 1.68),
+            },
+          },
         },
       ];
     }),
@@ -417,8 +427,61 @@ function json(data: unknown, init?: ResponseInit) {
   });
 }
 
+// ─── Mock WebSocket（实时通道）─────────────────────────────────────
+// mock 模式下服务端不存在 /api/clients WebSocket。替换 window.WebSocket 为
+// 模拟实现，让 wsStore 走与生产完全相同的 WS 代码路径（send "get" → 收帧）。
+function buildLiveFrame(): string {
+  const status = latestStatus();
+  const online = Object.keys(status).filter(
+    (uuid) => (status[uuid] as { online?: boolean })?.online !== false,
+  );
+  return JSON.stringify({ data: { data: status, online } });
+}
+
+class MockLiveSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  url: string;
+  readyState = MockLiveSocket.CONNECTING;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    // 异步触发 onopen，模拟真实连接握手。
+    setTimeout(() => {
+      if (this.readyState !== MockLiveSocket.CONNECTING) return;
+      this.readyState = MockLiveSocket.OPEN;
+      this.onopen?.();
+    }, 0);
+  }
+
+  send(data: string) {
+    if (this.readyState !== MockLiveSocket.OPEN) return;
+    if (data === "get") {
+      setTimeout(() => {
+        if (this.readyState !== MockLiveSocket.OPEN) return;
+        this.onmessage?.({ data: buildLiveFrame() });
+      }, 0);
+    }
+  }
+
+  close() {
+    this.readyState = MockLiveSocket.CLOSED;
+    // 不触发 onclose：stopWsConnection 会先摘掉回调，不触发可避免
+    // mock 环境误入重连 / 失败计数路径。
+  }
+}
+
 export function installDevMockApi() {
   const nativeFetch = window.fetch.bind(window);
+  // 实时数据走 mock WS（与生产同为唯一数据源，无 RPC 降级）。
+  window.WebSocket = MockLiveSocket as unknown as typeof WebSocket;
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -514,8 +577,6 @@ export function installDevMockApi() {
         result = [pingTask];
       } else if (payload.method === "common:getNodes") {
         result = Object.fromEntries(nodes.map((node) => [node.uuid, node]));
-      } else if (payload.method === "common:getNodesLatestStatus") {
-        result = latestStatus();
       } else if (payload.method === "common:getRecords") {
         const isPing = payload.params?.type === "ping";
         const records = isPing
