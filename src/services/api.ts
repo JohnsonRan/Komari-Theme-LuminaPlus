@@ -973,3 +973,85 @@ export async function getPingOverview(
     } as PingOverviewResponse;
   }
 }
+
+// ─── 版本号 ───────────────────────────────────────────────────────────────────
+
+export interface KomariVersion {
+  version: string;
+  hash: string;
+}
+
+export async function getVersion(
+  options?: { signal?: AbortSignal },
+): Promise<KomariVersion> {
+  return rpcCall(
+    "common:getVersion",
+    {},
+    z.object({
+      version: z.string().default(""),
+      hash: z.string().default(""),
+    }),
+    options,
+  );
+}
+
+// ─── 访客事件上报 ─────────────────────────────────────────────────────────────
+
+export function recordVisitorEvent(event: {
+  type: string;
+  path: string;
+  referrer?: string;
+}): void {
+  // fire-and-forget：不阻塞 UI，失败静默。
+  void rpcCall("public:recordVisitorEvent", event as unknown as Record<string, unknown>, z.unknown()).catch(
+    () => undefined,
+  );
+}
+
+// ─── 节点近期实时缓冲 ─────────────────────────────────────────────────────────
+
+export const RecentStatusRecordSchema = z
+  .object({
+    cpu: z.number().default(0),
+    gpu: z.number().default(0),
+    ram: z.number().default(0),
+    ram_total: z.number().default(0),
+    swap: z.number().default(0),
+    swap_total: z.number().default(0),
+    disk: z.number().default(0),
+    disk_total: z.number().default(0),
+    net_in: z.number().default(0),
+    net_out: z.number().default(0),
+    load: z.number().default(0),
+    process: z.number().default(0),
+    connections: z.number().default(0),
+    connections_udp: z.number().default(0),
+    time: z.union([z.string(), z.number()]),
+  })
+  .passthrough();
+
+export type RecentStatusRecord = z.infer<typeof RecentStatusRecordSchema>;
+
+export async function getNodeRecentStatus(
+  uuid: string,
+  options?: { signal?: AbortSignal },
+): Promise<RecentStatusRecord[]> {
+  const payload = await rpcCall(
+    "common:getNodeRecentStatus",
+    { uuid },
+    z.unknown(),
+    options,
+  );
+  // 后端可能返回数组或 { records: [...] } 包装。
+  const raw = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).records)
+      ? (payload as Record<string, unknown>).records
+      : [];
+  const out: RecentStatusRecord[] = [];
+  for (const item of raw) {
+    const parsed = RecentStatusRecordSchema.safeParse(item);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}

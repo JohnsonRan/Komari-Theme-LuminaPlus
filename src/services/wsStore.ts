@@ -116,6 +116,9 @@ function emptyMetrics(info: NodeInfo, online: boolean | null): NodeMetrics {
     connectionsTcp: 0,
     connectionsUdp: 0,
     updatedAt: 0,
+    pingLatest: null,
+    pingLoss: null,
+    gpuPct: 0,
   };
 }
 
@@ -142,6 +145,16 @@ export function resolveTrafficTotal(previous: number, raw: number): number {
   return Number.isFinite(raw) && raw > 0 ? raw : previous;
 }
 
+// ─── 内嵌 Ping 绑定解析器 ─────────────────────────────────────────────────────
+// 由 useHomepagePingOverview 挂载时注入，输入 uuid 输出当前绑定的 taskId 字符串。
+// 无绑定时返回 undefined，此时 mergeRealtime 会取 ping map 的第一个 task。
+type PingBindingResolver = (uuid: string) => string | undefined;
+let pingBindingResolver: PingBindingResolver | null = null;
+
+export function setPingBindingResolver(resolver: PingBindingResolver | null) {
+  pingBindingResolver = resolver;
+}
+
 function resolveTrafficTotals(previous: NodeMetrics, nextUp: number, nextDown: number) {
   return {
     up: resolveTrafficTotal(previous.trafficUp, nextUp),
@@ -153,6 +166,7 @@ function mergeRealtime(
   metrics: NodeMetrics,
   rt: NodeRealtime,
   online: boolean,
+  uuid: string,
 ): NodeMetrics {
   const ramUsed = rt.ram.used;
   const ramTotal = rt.ram.total;
@@ -166,6 +180,20 @@ function mergeRealtime(
     rt.network?.totalUp ?? 0,
     rt.network?.totalDown ?? 0,
   );
+
+  // 从内嵌 ping map 中提取当前绑定任务的实时延迟/丢包。
+  let pingLatest: number | null = null;
+  let pingLoss: number | null = null;
+  if (rt.ping) {
+    const boundTaskId = pingBindingResolver?.(uuid);
+    const entry = boundTaskId != null
+      ? rt.ping[boundTaskId]
+      : Object.values(rt.ping)[0];
+    if (entry) {
+      pingLatest = Number.isFinite(entry.latest) ? entry.latest : null;
+      pingLoss = Number.isFinite(entry.loss) ? entry.loss : null;
+    }
+  }
 
   return {
     online,
@@ -190,6 +218,9 @@ function mergeRealtime(
     connectionsTcp: rt.connections?.tcp ?? 0,
     connectionsUdp: rt.connections?.udp ?? 0,
     updatedAt: updatedAt > 0 ? updatedAt : metrics.updatedAt,
+    pingLatest,
+    pingLoss,
+    gpuPct: rt.gpu?.usage ?? 0,
   };
 }
 
@@ -216,7 +247,10 @@ function shallowEqualMetrics(a: NodeMetrics, b: NodeMetrics) {
     a.process === b.process &&
     a.connectionsTcp === b.connectionsTcp &&
     a.connectionsUdp === b.connectionsUdp &&
-    a.updatedAt === b.updatedAt
+    a.updatedAt === b.updatedAt &&
+    a.pingLatest === b.pingLatest &&
+    a.pingLoss === b.pingLoss &&
+    a.gpuPct === b.gpuPct
   );
 }
 
@@ -514,6 +548,8 @@ function normalizeRealtime(
     Object.keys(ram).length > 0 ||
     Object.keys(network).length > 0;
 
+  const ping = parseEmbeddedPing(payload.ping);
+
   if (hasNestedShape) {
     return {
       cpu: { usage: asNumber(cpu.usage) },
@@ -547,6 +583,7 @@ function normalizeRealtime(
       uptime: asNumber(payload.uptime),
       process: asNumber(payload.process),
       updated_at: (payload.updated_at ?? payload.time) as string | number | undefined,
+      ping,
     };
   }
 
@@ -582,7 +619,32 @@ function normalizeRealtime(
     uptime: asNumber(payload.uptime),
     process: asNumber(payload.process),
     updated_at: (payload.updated_at ?? payload.time) as string | number | undefined,
+    ping,
   };
+}
+
+/** 解析后端内嵌的 ping 字段：Record<taskId, { latest, loss, ... }> */
+function parseEmbeddedPing(
+  raw: unknown,
+): Record<string, { latest: number; loss: number }> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const map = raw as Record<string, unknown>;
+  const keys = Object.keys(map);
+  if (keys.length === 0) return undefined;
+  const result: Record<string, { latest: number; loss: number }> = {};
+  for (const key of keys) {
+    const entry = map[key];
+    if (!entry || typeof entry !== "object") continue;
+    const rec = entry as Record<string, unknown>;
+    const latest = asNumber(rec.latest, -1);
+    const loss = asNumber(rec.loss, -1);
+    // latest < 0 表示无有效值（全部丢包时后端可能返回 -1）。
+    result[key] = {
+      latest: latest >= 0 ? latest : NaN,
+      loss: loss >= 0 ? loss : NaN,
+    };
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function applyLatestStatus(records: Record<string, unknown>) {
@@ -600,7 +662,7 @@ function applyLatestStatus(records: Record<string, unknown>) {
     const online = resolveOnline(rawRecord);
     const realtime = normalizeRealtime(rawRecord, meta, prev);
     const merged = realtime
-      ? mergeRealtime(prev, realtime, online)
+      ? mergeRealtime(prev, realtime, online, uuid)
       : { ...prev, online };
 
     if (!shallowEqualMetrics(prev, merged)) {

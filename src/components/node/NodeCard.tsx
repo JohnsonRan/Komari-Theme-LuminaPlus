@@ -221,6 +221,7 @@ export const NodeCard = memo(function NodeCard({
           uptime={uptime}
           footerTags={footerTags}
           renewalPrice={renewalPrice}
+          lastSeen={model.lastSeen}
         />
       </div>
     </article>
@@ -608,12 +609,14 @@ function NodeCardFooter({
   uptime,
   footerTags,
   renewalPrice,
+  lastSeen,
 }: {
   expire: DisplayStat;
   expireColor: string;
   uptime: DisplayStat;
   footerTags: DisplayTag[];
   renewalPrice: string | null;
+  lastSeen: string | null;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -684,10 +687,10 @@ function NodeCardFooter({
       <div className="server-card-meta-grid">
         <FooterStat
           icon={<RefreshCw size={13} strokeWidth={2} />}
-          label="在线"
-          value={uptime.value}
-          unit={uptime.unit}
-          color="var(--progress-cpu)"
+          label={lastSeen ? "离线" : "在线"}
+          value={lastSeen ?? uptime.value}
+          unit={lastSeen ? "" : uptime.unit}
+          color={lastSeen ? "var(--text-tertiary)" : "var(--progress-cpu)"}
         />
         <FooterStat
           icon={<Calendar size={13} strokeWidth={2} />}

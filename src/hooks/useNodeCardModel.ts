@@ -10,6 +10,7 @@ import {
   formatBytes,
   formatByteRate,
   formatExpireDays,
+  formatRelativeTime,
   formatUptimeDays,
   joinDisplayParts,
   parseTags,
@@ -68,14 +69,28 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
     };
   }, [meta, now, showCardGroup]);
 
-  // ping 派生的颜色只在 ping item 变化时才变。
+  // 内嵌 ping 实时数据优先：延迟/丢包数值每 2s 跟随 latestStatus 刷新，
+  // 历史柱状图仍由 overview 提供。无内嵌数据时回退到 overview 的 60s 数据。
+  const resolvedPing = useMemo(() => {
+    if (!metrics) return ping;
+    const latest = metrics.pingLatest;
+    const loss = metrics.pingLoss;
+    if (latest == null && loss == null) return ping;
+    return {
+      ...ping,
+      lastValue: latest ?? ping.lastValue,
+      loss: loss ?? ping.loss,
+    };
+  }, [ping, metrics?.pingLatest, metrics?.pingLoss]);
+
+  // ping 派生的颜色只在解析后的 ping 值变化时才变。
   const pingModel = useMemo(
     () => ({
-      latencyColor: latencyHeatColor(ping.lastValue),
-      lossColor: lossHeatColor(ping.loss),
-      hasHomepagePingBinding: ping.isAssigned,
+      latencyColor: latencyHeatColor(resolvedPing.lastValue),
+      lossColor: lossHeatColor(resolvedPing.loss),
+      hasHomepagePingBinding: resolvedPing.isAssigned,
     }),
-    [ping],
+    [resolvedPing],
   );
 
   return useMemo(() => {
@@ -116,7 +131,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
     return {
       node: { ...meta, ...metrics },
       trafficTrend,
-      ping,
+      ping: resolvedPing,
       pingBuckets,
       traffic,
       ...metaModel,
@@ -127,6 +142,9 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       downRate: formatByteRate(metrics.netDown),
       isOnline: metrics.online === true,
       isOffline: metrics.online === false,
+      lastSeen: metrics.online === false && metrics.updatedAt > 0
+        ? formatRelativeTime(metrics.updatedAt)
+        : null,
     };
-  }, [meta, metrics, metaModel, pingModel, ping, pingBuckets, trafficTrend]);
+  }, [meta, metrics, metaModel, pingModel, resolvedPing, pingBuckets, trafficTrend]);
 }

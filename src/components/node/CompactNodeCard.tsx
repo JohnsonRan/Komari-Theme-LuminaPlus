@@ -728,8 +728,12 @@ export const CompactNodeCard = memo(function CompactNodeCard({
   const showBilling = themeSettings.isReady && themeSettings.compactShowBilling;
   const showUptime = themeSettings.isReady && themeSettings.compactShowUptime;
   const showConnections = themeSettings.isReady && themeSettings.showConnections;
-  // 开关关闭或节点离线时,完全跳过格式化工作。
-  const uptimeLabel = showUptime && !isOffline ? formatCompactUptime(node.uptime) : "";
+  // 开关关闭或节点离线时,完全跳过格式化工作。离线时显示最后在线时间。
+  const uptimeLabel = showUptime && !isOffline
+    ? formatCompactUptime(node.uptime)
+    : isOffline && model.lastSeen
+      ? model.lastSeen
+      : "";
 
   return (
     <article className={clsx("compact-node-card", isOffline && "is-offline")}>

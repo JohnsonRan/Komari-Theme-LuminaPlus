@@ -8,11 +8,13 @@ import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useSiteMetadata } from "@/hooks/useSiteMetadata";
 import { useMetricColorsSync } from "@/hooks/useMetricColors";
 import { useNodeStoreStatus } from "@/hooks/useNode";
+import { useVisitorTracking } from "@/hooks/useVisitorTracking";
 
 export function AppShell() {
   useAppearance();
   useSiteMetadata();
   useMetricColorsSync();
+  useVisitorTracking();
   const { pathname, search } = useLocation();
   const publicConfig = usePublicConfig();
   const auth = useAuth();

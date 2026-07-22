@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useVisibleNodeUuids } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { getPingOverview } from "@/services/api";
+import { setPingBindingResolver } from "@/services/wsStore";
 import type {
   PingOverviewBucket,
   PingOverviewItem,
@@ -17,8 +18,8 @@ import {
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
 
-const DEFAULT_PING_REFRESH_INTERVAL = 60_000;
-const MIN_PING_REFRESH_INTERVAL = 10_000;
+const DEFAULT_PING_REFRESH_INTERVAL = 120_000;
+const MIN_PING_REFRESH_INTERVAL = 30_000;
 const MAX_PING_REFRESH_INTERVAL = 300_000;
 // 首页延迟图表最多显示 24 个 bucket。metric API 返回的是聚合区间而不是瞬时点，
 // 绘制时要把较粗的后端区间投影到它覆盖的可视 bucket，同时保持卡片密度一致。
@@ -577,6 +578,21 @@ export function useHomepagePingOverview() {
       }
     };
   }, [themeSettings.homepagePingBindings, themeSettings.isReady, effectiveUuids]);
+
+  // 向 wsStore 注册 ping 绑定解析器，让内嵌 ping 数据能按绑定任务提取正确的延迟/丢包。
+  const invertedBindings = useMemo(
+    () => invertHomepagePingTaskBindings(themeSettings.homepagePingBindings),
+    [themeSettings.homepagePingBindings],
+  );
+  useEffect(() => {
+    if (!themeSettings.isReady) return;
+    const resolver = (uuid: string) => {
+      const taskId = invertedBindings.get(uuid);
+      return taskId != null ? String(taskId) : undefined;
+    };
+    setPingBindingResolver(resolver);
+    return () => setPingBindingResolver(null);
+  }, [invertedBindings, themeSettings.isReady]);
 }
 
 export function useNodePingOverview(uuid: string): PingOverviewItem {

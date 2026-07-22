@@ -96,6 +96,7 @@ export interface NodeInfo {
 
 export interface NodeRealtime {
   cpu: { usage: number };
+  gpu?: { usage: number };
   ram: { total: number; used: number };
   swap: { total: number; used: number };
   load: { load1: number; load5: number; load15: number };
@@ -105,6 +106,8 @@ export interface NodeRealtime {
   uptime: number;
   process: number;
   updated_at?: string | number;
+  /** 后端 getNodesLatestStatus 内嵌的每任务实时 ping 统计。键为 taskId 字符串。 */
+  ping?: Record<string, { latest: number; loss: number }>;
 }
 
 /** 展示用模型:扁平化的节点信息 + 实时指标 + 在线标志。 */
@@ -131,6 +134,12 @@ export interface NodeMetrics {
   connectionsTcp: number;
   connectionsUdp: number;
   updatedAt: number;
+  /** 内嵌 ping 实时延迟 (ms)，无数据时为 null。 */
+  pingLatest: number | null;
+  /** 内嵌 ping 实时丢包率 (%)，无数据时为 null。 */
+  pingLoss: number | null;
+  /** GPU 使用率 (%)，无 GPU 或未上报时为 0。 */
+  gpuPct: number;
 }
 
 export interface ThemeSettings {

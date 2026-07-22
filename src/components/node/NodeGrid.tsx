@@ -28,6 +28,7 @@ import { getDisplayRegionCode } from "@/utils/geo";
 import { useHomeSort } from "@/hooks/useHomeSort";
 import { useHomeNodeOrder } from "@/hooks/useHomeNodeOrder";
 import { preloadTodayTrafficStats } from "@/hooks/useTodayTrafficStats";
+import { useVersion } from "@/hooks/useVersion";
 import { HomeSortControl } from "./HomeSortControl";
 import { CompactNodeCard } from "./CompactNodeCard";
 import { MiniNodeCard } from "./MiniNodeCard";
@@ -89,11 +90,17 @@ function TrafficBarsIcon({ size = 19 }: { size?: number }) {
 
 // 站点铭牌由 CSS 放进 AppShell 顶部留白，不占概览卡内容流。
 function HomeBrand({ siteName }: { siteName: string }) {
+  const { data: version } = useVersion();
   return (
     <header className="home-brand" aria-label="站点名称">
       <h1 className="home-brand-title" title={siteName}>
         {siteName}
       </h1>
+      {version?.version && (
+        <span className="home-brand-version" title={`Komari ${version.version} (${version.hash.slice(0, 7)})`}>
+          v{version.version}
+        </span>
+      )}
     </header>
   );
 }

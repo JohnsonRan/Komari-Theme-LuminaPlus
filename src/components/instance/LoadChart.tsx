@@ -11,10 +11,11 @@ import {
 } from "react";
 import UplotReact from "uplot-react";
 import type uPlot from "uplot";
-import { ArrowDown, ArrowUp, Cpu, Gauge, HardDrive, MemoryStick, Network, RefreshCw, Workflow } from "lucide-react";
+import { ArrowDown, ArrowUp, CircuitBoard, Cpu, Gauge, HardDrive, MemoryStick, Network, RefreshCw, Workflow } from "lucide-react";
 import { clsx } from "clsx";
 import { useLoadRecords } from "@/hooks/useRecords";
 import { useNodeMeta, useNodeMetrics } from "@/hooks/useNode";
+import { useRecentStatus } from "@/hooks/useRecentStatus";
 import { InstancePanel, InstanceChartLoading } from "./InstancePanel";
 import {
   buildChartTooltipHooks,
@@ -58,6 +59,8 @@ const CONNECTION_KEYS = ["connections", "udp"];
 const CONNECTION_COLORS = [CHART_PALETTE.memory, CHART_PALETTE.cpu];
 const PROCESS_KEYS = ["process"];
 const PROCESS_COLORS = [CHART_PALETTE.warning];
+const GPU_KEYS = ["gpu"];
+const GPU_COLORS = ["#e05d7b"];
 const SERIES_LABELS: Record<string, string> = {
   cpu: "CPU",
   ram: "内存",
@@ -71,6 +74,7 @@ const SERIES_LABELS: Record<string, string> = {
   connections: "TCP",
   udp: "UDP",
   process: "进程",
+  gpu: "GPU",
 };
 const LOAD_INTERPOLATE_KEYS = [
   "cpu",
@@ -85,6 +89,7 @@ const LOAD_INTERPOLATE_KEYS = [
   "connections",
   "udp",
   "process",
+  "gpu",
 ];
 
 interface ChartPoint {
@@ -139,6 +144,7 @@ function pointFromNode(node: NodeMetrics): ChartPoint {
     connections: node.connectionsTcp,
     udp: node.connectionsUdp,
     process: node.process,
+    gpu: node.gpuPct,
   };
 }
 
@@ -199,7 +205,7 @@ function buildBaseOptions({
   rangeHours,
   spanGaps,
   axisKind = "default",
-  axisSize = 52,
+  axisSize,
   xRange,
   networkUnit = "mbs",
 }: {
@@ -215,6 +221,8 @@ function buildBaseOptions({
   xRange?: [number, number] | null;
   networkUnit?: DetailNetworkUnit;
 }): Omit<uPlot.Options, "width" | "height"> {
+  // bytes 模式的标签（如 "76.2 MB"）比百分比模式更宽，需要更大的轴尺寸避免文字被裁切。
+  const resolvedAxisSize = axisSize ?? (axisKind === "bytes" ? 72 : 52);
   const isDark = resolvedAppearance === "dark";
   const { grid, text } = getAxisColors(isDark);
 
@@ -242,7 +250,7 @@ function buildBaseOptions({
         stroke: text,
         grid: { stroke: grid, width: 1 },
         ticks: { stroke: grid },
-        size: axisSize,
+        size: resolvedAxisSize,
         values: (self, splits) => {
           const min = Number(self.scales.y.min ?? 0);
           const max = Number(self.scales.y.max ?? 0);
@@ -449,11 +457,14 @@ export function LoadChart({
     queryHours,
     active,
   );
+  // 近期实时缓冲：完整历史加载前先展示迷你趋势，避免白屏等待。
+  const { data: recentRecords } = useRecentStatus(isLoading ? uuid : undefined);
   const isRealtime = hours === 0;
   const node = useNodeMetrics(uuid, isRealtime && active);
   // 新版后端不再存储 memory.total / swap.total / disk.total 指标序列，
   // 历史记录的 total 字段为 0 时回退到节点注册时的静态总量。
   const meta = useNodeMeta(uuid);
+  const hasGpu = Boolean(meta?.gpu_name && meta.gpu_name !== "None");
   const { resolvedAppearance } = usePreferences();
   const themeSettings = useThemeSettings();
   const useBytesUnit = themeSettings.isReady && themeSettings.detailChartUnit === "bytes";
@@ -531,12 +542,44 @@ export function LoadChart({
         connections: record.connections,
         udp: record.connections_udp,
         process: record.process,
+        gpu: record.gpu,
       };
     });
     const sampled = downsamplePoints(rawPoints, getHistoryRenderLimit(hours));
     const filled = fillMissingMetricPoints(sampled);
     return interpolateMetricGaps(filled, LOAD_INTERPOLATE_KEYS) as ChartPoint[];
   }, [historyRecords, hours, fallbackRamTotal, fallbackSwapTotal, fallbackDiskTotal]);
+
+  // 近期缓冲转 ChartPoint：完整历史到达前作为临时数据源。
+  const recentPoints = useMemo<ChartPoint[]>(() => {
+    if (!recentRecords || recentRecords.length === 0) return [];
+    return recentRecords
+      .map((rec) => {
+        const time = toChartSeconds(rec.time);
+        if (time <= 0) return null;
+        const ramTotal = rec.ram_total > 0 ? rec.ram_total : fallbackRamTotal;
+        const swapTotal = rec.swap_total > 0 ? rec.swap_total : fallbackSwapTotal;
+        const diskTotal = rec.disk_total > 0 ? rec.disk_total : fallbackDiskTotal;
+        return {
+          time,
+          cpu: rec.cpu,
+          ram: ramTotal > 0 ? (rec.ram / ramTotal) * 100 : 0,
+          swap: swapTotal > 0 ? (rec.swap / swapTotal) * 100 : 0,
+          disk: diskTotal > 0 ? (rec.disk / diskTotal) * 100 : 0,
+          ramBytes: rec.ram,
+          swapBytes: rec.swap,
+          diskBytes: rec.disk,
+          netIn: rec.net_in,
+          netOut: rec.net_out,
+          connections: rec.connections,
+          udp: rec.connections_udp,
+          process: rec.process,
+          gpu: rec.gpu,
+        } as ChartPoint;
+      })
+      .filter((p): p is ChartPoint => p !== null)
+      .sort((a, b) => a.time - b.time);
+  }, [recentRecords, fallbackRamTotal, fallbackSwapTotal, fallbackDiskTotal]);
 
   const points = useMemo<ChartPoint[]>(() => {
     if (isRealtime) {
@@ -548,8 +591,9 @@ export function LoadChart({
       });
       return deduped.slice(-REALTIME_SAMPLE_LIMIT);
     }
-    return historyPoints;
-  }, [historyPoints, isRealtime, realtimePoints]);
+    // 完整历史到达前用近期缓冲作为临时数据源。
+    return historyPoints.length > 0 ? historyPoints : recentPoints;
+  }, [historyPoints, recentPoints, isRealtime, realtimePoints]);
 
   const sourceRecordCount = historyRecords.length;
   const wasDownsampled = !isRealtime && sourceRecordCount > getHistoryRenderLimit(hours);
@@ -579,7 +623,7 @@ export function LoadChart({
   const lastSwapTotal = (lastRecord?.swap_total ?? 0) > 0 ? lastRecord!.swap_total : fallbackSwapTotal;
   const lastDiskTotal = (lastRecord?.disk_total ?? 0) > 0 ? lastRecord!.disk_total : fallbackDiskTotal;
 
-  if (isLoading) {
+  if (isLoading && !recentPoints.length) {
     return <InstanceChartLoading title="负载图表" />;
   }
 
@@ -804,6 +848,29 @@ export function LoadChart({
           xRange={requestedXRange}
           resetSignal={resetSignal}
         />
+        {hasGpu && (
+          <ChartCard
+            icon={<CircuitBoard size={13} />}
+            title="GPU"
+            uuid={uuid}
+            value={
+              isRealtime && node
+                ? `${node.gpuPct.toFixed(2)}%`
+                : `${(points[points.length - 1]?.gpu ?? 0).toFixed(2)}%`
+            }
+            note={meta?.gpu_name || "使用率"}
+            points={points}
+            keys={GPU_KEYS}
+            colors={GPU_COLORS}
+            resolvedAppearance={resolvedAppearance}
+            rangeHours={hours}
+            unit="%"
+            spanGaps={connectNulls}
+            axisKind="percent"
+            xRange={requestedXRange}
+            resetSignal={resetSignal}
+          />
+        )}
       </div>
     </InstancePanel>
   );

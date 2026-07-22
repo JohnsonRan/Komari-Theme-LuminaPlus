@@ -1,5 +1,5 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import { clsx } from "clsx";
 import "uplot/dist/uPlot.min.css";
@@ -14,8 +14,10 @@ import {
   buildPingTimeRangeOptions,
 } from "@/components/instance/chartShared";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
-import { useNodeMeta, useNodeStoreStatus } from "@/hooks/useNode";
+import { useNodeMeta, useNodeStoreStatus, useAllNodeMeta } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
+import { useAuth } from "@/hooks/useAuth";
+import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
 
 const DEFAULT_PING_HOURS = 4;
 type TimeRangeOption = ReturnType<typeof buildLoadTimeRangeOptions>[number];
@@ -48,6 +50,7 @@ function RangeSelector({
 
 export function Instance() {
   const { uuid } = useParams<{ uuid: string }>();
+  const navigate = useNavigate();
   const { data: config } = usePublicConfig();
   const themeSettings = useThemeSettings();
   const meta = useNodeMeta(uuid ?? "");
@@ -110,6 +113,39 @@ export function Instance() {
     // 进入详情页或切换节点时回到顶部，避免保留上一页的滚动位置。
     window.scrollTo(0, 0);
   }, [uuid]);
+
+  // 键盘导航：← / → 切换上/下一个节点。
+  const allMeta = useAllNodeMeta();
+  const { hiddenNodes } = useThemeSettings();
+  const { data: authMe } = useAuth();
+  const visibleUuids = useMemo(() => {
+    const hiddenUuids = collectMatchingNodeUuids(allMeta, hiddenNodes);
+    return allMeta
+      .filter((n) => !hiddenUuids.has(n.uuid) && (authMe?.logged_in === true || !n.hidden))
+      .map((n) => n.uuid);
+  }, [allMeta, hiddenNodes, authMe?.logged_in]);
+
+  useEffect(() => {
+    if (!uuid || visibleUuids.length <= 1) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      // 忽略输入框内的按键
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) return;
+      const currentIndex = visibleUuids.indexOf(uuid);
+      if (currentIndex < 0) return;
+      event.preventDefault();
+      const nextIndex = event.key === "ArrowLeft"
+        ? (currentIndex - 1 + visibleUuids.length) % visibleUuids.length
+        : (currentIndex + 1) % visibleUuids.length;
+      const nextUuid = visibleUuids[nextIndex];
+      if (nextUuid && nextUuid !== uuid) {
+        navigate(`/instance/${encodeURIComponent(nextUuid)}`);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [uuid, visibleUuids, navigate]);
 
   if (!uuid) return null;
 
