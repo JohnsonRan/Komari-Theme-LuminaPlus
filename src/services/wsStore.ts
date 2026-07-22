@@ -59,6 +59,9 @@ const SCROLL_IDLE_DELAY_MS = 160;
 const IDLE_THRESHOLD_MS = 120_000;
 const IDLE_REFRESH_INTERVAL_MS = 10_000;
 const IDLE_NODE_INFO_INTERVAL_MS = 60_000;
+// WebSocket 实时通道（同默认主题 /api/clients），RPC 轮询仅作降级兜底。
+const WS_RECONNECT_DELAY_MS = 3_000;
+const WS_FRESH_THRESHOLD_MS = 8_000;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
 const EMPTY_TRAFFIC_TREND_SAMPLE: TrafficTrendSample = {
   value: 0,
@@ -227,10 +230,12 @@ function mergeRealtime(
     updatedAt: updatedAt > 0 ? updatedAt : metrics.updatedAt,
     pingLatest,
     pingLoss,
-    gpuPct: rt.gpu?.usage ?? 0,
-    gpuMemUsed: rt.gpu?.memoryUsed ?? 0,
-    gpuMemTotal: rt.gpu?.memoryTotal ?? 0,
-    gpuTemp: rt.gpu?.temperature ?? 0,
+    // RPC（getNodesLatestStatus）硬编码 gpu=0，不携带 GPU 数据；
+    // WS 通道提供 GPU 后，后续 RPC 帧不应将其冲零。
+    gpuPct: rt.gpu?.usage ?? metrics.gpuPct,
+    gpuMemUsed: rt.gpu?.memoryUsed ?? metrics.gpuMemUsed,
+    gpuMemTotal: rt.gpu?.memoryTotal ?? metrics.gpuMemTotal,
+    gpuTemp: rt.gpu?.temperature ?? metrics.gpuTemp,
   };
 }
 
@@ -416,6 +421,10 @@ let scrollIdleTimer: number | null = null;
 let scrollTrackingStarted = false;
 let scrollActive = false;
 let refreshDeferredWhileScrolling = false;
+let ws: WebSocket | null = null;
+let wsGetTimer: number | null = null;
+let wsReconnectTimer: number | null = null;
+let wsLastMessageAt = 0;
 
 interface CommitTouches {
   meta?: Iterable<string>;
@@ -784,6 +793,171 @@ function applyLatestStatus(records: Record<string, unknown>) {
   };
 }
 
+// ─── WebSocket 实时通道 ───────────────────────────────────────────────────────
+// 与默认主题相同，通过 /api/clients WebSocket 获取完整 v1.Report（含 GPU）。
+// RPC 轮询仅在 WS 不可用时作为降级路径。
+
+function isMockMode(): boolean {
+  try {
+    return (
+      import.meta.env.DEV &&
+      new URLSearchParams(window.location.search).get("mock") === "1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function wsIsFresh(): boolean {
+  return wsLastMessageAt > 0 && Date.now() - wsLastMessageAt < WS_FRESH_THRESHOLD_MS;
+}
+
+function applyWsLivePayload(payload: unknown) {
+  const envelope = asRecord(payload);
+  const body = asRecord(envelope.data);
+  const dataMap = asRecord(body.data);
+  const onlineList = body.online;
+  const onlineSet = new Set(
+    Array.isArray(onlineList)
+      ? onlineList.filter((item): item is string => typeof item === "string")
+      : [],
+  );
+
+  const touchedMetrics = new Set<string>();
+  const touchedTrafficTrends = new Set<string>();
+  let nextMetricsByUuid = state.metricsByUuid;
+  let nextTrafficTrends = state.trafficTrends;
+
+  for (const uuid of state.order) {
+    const meta = state.metaByUuid[uuid];
+    const prev = state.metricsByUuid[uuid];
+    if (!meta || !prev) continue;
+    if (!(uuid in dataMap)) continue;
+
+    const online = onlineSet.has(uuid);
+    const realtime = normalizeRealtime(dataMap[uuid], meta, prev);
+    const merged = realtime
+      ? mergeRealtime(prev, realtime, online, uuid)
+      : { ...prev, online };
+
+    if (!shallowEqualMetrics(prev, merged)) {
+      if (nextMetricsByUuid === state.metricsByUuid) {
+        nextMetricsByUuid = { ...state.metricsByUuid };
+      }
+      nextMetricsByUuid[uuid] = merged;
+      touchedMetrics.add(uuid);
+    }
+
+    const prevTrend = state.trafficTrends[uuid] ?? EMPTY_TRAFFIC_TREND;
+    const nextUp = updateTrafficTrendSeries(
+      prevTrend.up,
+      merged.netUp,
+      merged.updatedAt,
+      merged.online,
+    );
+    const nextDown = updateTrafficTrendSeries(
+      prevTrend.down,
+      merged.netDown,
+      merged.updatedAt,
+      merged.online,
+    );
+
+    if (nextUp.changed || nextDown.changed) {
+      if (nextTrafficTrends === state.trafficTrends) {
+        nextTrafficTrends = { ...state.trafficTrends };
+      }
+      nextTrafficTrends[uuid] = {
+        up: nextUp.series,
+        down: nextDown.series,
+        snapshot: {
+          up: nextUp.series.snapshot,
+          down: nextDown.series.snapshot,
+        },
+      };
+      touchedTrafficTrends.add(uuid);
+    }
+  }
+
+  if (touchedMetrics.size > 0 || touchedTrafficTrends.size > 0) {
+    commit(
+      {
+        ...state,
+        metricsByUuid: touchedMetrics.size > 0 ? nextMetricsByUuid : state.metricsByUuid,
+        trafficTrends:
+          touchedTrafficTrends.size > 0 ? nextTrafficTrends : state.trafficTrends,
+      },
+      {
+        metrics: touchedMetrics,
+        trafficTrends: touchedTrafficTrends,
+      },
+    );
+  }
+}
+
+function stopWsConnection() {
+  if (wsGetTimer != null) {
+    window.clearInterval(wsGetTimer);
+    wsGetTimer = null;
+  }
+  if (wsReconnectTimer != null) {
+    window.clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  if (ws) {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
+}
+
+function startWsConnection() {
+  if (ws || wsReconnectTimer != null || isMockMode()) return;
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(`${protocol}//${window.location.host}/api/clients`);
+  } catch {
+    return;
+  }
+  ws = socket;
+
+  socket.onopen = () => {
+    wsLastMessageAt = Date.now();
+    socket.send("get");
+    wsGetTimer = window.setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.send("get");
+    }, LIVE_STATUS_REFRESH_INTERVAL_MS);
+  };
+  socket.onmessage = (event) => {
+    wsLastMessageAt = Date.now();
+    try {
+      applyWsLivePayload(JSON.parse(String(event.data)));
+    } catch {
+      // 格式异常时忽略本帧。
+    }
+  };
+  socket.onerror = () => {
+    socket.close();
+  };
+  socket.onclose = () => {
+    if (wsGetTimer != null) {
+      window.clearInterval(wsGetTimer);
+      wsGetTimer = null;
+    }
+    if (ws === socket) ws = null;
+    if (started && !pageHidden && !isMockMode()) {
+      wsReconnectTimer = window.setTimeout(() => {
+        wsReconnectTimer = null;
+        startWsConnection();
+      }, WS_RECONNECT_DELAY_MS);
+    }
+  };
+}
+
 let hydrated = false;
 let nodeInfoError = false;
 let refreshInFlight = false;
@@ -1006,7 +1180,8 @@ function scheduleLiveStatusTick() {
     if (pageHidden || !started) return;
     if (!hydrated) {
       void bootstrap();
-    } else {
+    } else if (!wsIsFresh()) {
+      // WS 通道健康时跳过 RPC 轮询（WS 已提供全量实时数据含 GPU）。
       void refreshLatestStatus();
     }
     scheduleLiveStatusTick();
@@ -1039,6 +1214,7 @@ function handleVisibilityChange() {
       window.clearTimeout(nodeInfoTimer);
       nodeInfoTimer = null;
     }
+    stopWsConnection();
   } else {
     // 页面恢复可见：立即刷新一次，然后恢复正常调度。
     markUserInteraction();
@@ -1048,6 +1224,7 @@ function handleVisibilityChange() {
       } else {
         void refreshLatestStatus();
       }
+      startWsConnection();
       scheduleLiveStatusTick();
       scheduleNodeInfoTick();
     }
@@ -1065,6 +1242,7 @@ function ensureStarted() {
   lastInteractionTime = Date.now();
 
   void bootstrap();
+  startWsConnection();
   // 实时指标与节点信息使用自适应调度（感知 visibility + 空闲状态）。
   scheduleLiveStatusTick();
   scheduleNodeInfoTick();
@@ -1100,6 +1278,8 @@ function stopStore() {
   liveStatusController = null;
   nodeInfoController?.abort();
   nodeInfoController = null;
+  stopWsConnection();
+  wsLastMessageAt = 0;
   if (liveStatusTimer != null) {
     window.clearTimeout(liveStatusTimer);
     liveStatusTimer = null;
