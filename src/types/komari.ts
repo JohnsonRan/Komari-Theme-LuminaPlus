@@ -154,6 +154,7 @@ export interface ThemeSettings {
   compactShowUptime?: boolean;
   showConnections?: boolean;
   detailChartUnit?: "percent" | "bytes";
+  // 存储类型：旧配置可能存了已废弃的 "auto"，由 normalizeThemeSettings 归一化到 mbs。
   detailNetworkUnit?: "auto" | "mbs" | "mbps";
   detailSplitLayout?: boolean;
   hiddenNodes?: string[];

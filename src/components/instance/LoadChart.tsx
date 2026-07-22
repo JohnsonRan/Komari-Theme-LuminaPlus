@@ -31,7 +31,7 @@ import {
   fillMissingMetricPoints,
   interpolateMetricGaps,
 } from "./chartData";
-import { formatBytes, formatFixedMBsLabel, formatFixedMbpsLabel, formatTrafficRateLabel } from "@/utils/format";
+import { formatByteRateLabel, formatBytes, formatTrafficRateLabel } from "@/utils/format";
 import { historyChartRangeSeconds, historyCoverageLabel } from "@/utils/historyRange";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
@@ -141,11 +141,10 @@ function pointFromNode(node: NodeMetrics): ChartPoint {
   };
 }
 
-// 网络速率按主题设置选择口径:自适应(bits 档位) / 固定 MB·s / 固定 Mbps。
+// 网络速率按主题设置选择单位族，各族内自适应进位：
+// mbs 按字节（B/s · KB/s · MB/s · GB/s），mbps 按比特（Kbps · Mbps · Gbps · Tbps）。
 function formatNetworkRate(value: number, unit: DetailNetworkUnit): string {
-  if (unit === "mbs") return formatFixedMBsLabel(value);
-  if (unit === "mbps") return formatFixedMbpsLabel(value);
-  return formatTrafficRateLabel(value);
+  return unit === "mbps" ? formatTrafficRateLabel(value) : formatByteRateLabel(value);
 }
 
 const BYTES_TOOLTIP_KEYS = new Set(["ramBytes", "swapBytes", "diskBytes"]);
@@ -201,7 +200,7 @@ function buildBaseOptions({
   axisKind = "default",
   axisSize = 52,
   xRange,
-  networkUnit = "auto",
+  networkUnit = "mbs",
 }: {
   title: string;
   keys: string[];
@@ -295,7 +294,7 @@ const ChartCard = memo(function ChartCard({
   axisKind,
   axisSize,
   xRange,
-  networkUnit = "auto",
+  networkUnit = "mbs",
   resetSignal = 0,
 }: {
   icon: ReactNode;
@@ -328,6 +327,7 @@ const ChartCard = memo(function ChartCard({
   const { onCreate, pinned, zoomed, pinnedRef } = useChartInteractions({
     fullRange: xRange ?? null,
     resetSignal,
+    onUnpin: () => setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev)),
   });
   const data = useMemo(() => metricData(points, keys), [points, keys]);
   useLayoutEffect(() => {
@@ -420,7 +420,9 @@ const ChartCard = memo(function ChartCard({
           key={`${uuid}-${rangeHours}`}
           options={chartOptions}
           data={data}
-          resetScales={rangeHours === 0}
+          // 实时模式下滑动窗口需要 setData 重置缩放；但用户手动放大后
+          // （zoomed）不能再被每秒的数据更新冲掉，否则缩放永远保不住。
+          resetScales={rangeHours === 0 && !zoomed}
           onCreate={onCreate}
         />
         <ChartTooltip tooltip={tooltip} />

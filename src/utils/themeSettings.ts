@@ -20,7 +20,8 @@ import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from
 export type Appearance = "system" | "light" | "dark";
 export type NodeViewMode = "large" | "compact" | "mini" | "list";
 export type DetailChartUnit = "percent" | "bytes";
-export type DetailNetworkUnit = "auto" | "mbs" | "mbps";
+// 只保留两个单位族，各族内自适应进位；旧存储值 "auto" 归一化到 mbs（见 normalize）。
+export type DetailNetworkUnit = "mbs" | "mbps";
 
 export interface ResolvedThemeSettings {
   defaultAppearance: Appearance;
@@ -66,15 +67,15 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   showRegionBar: true,
   showCardGroup: true,
   homeGroupOrder: [],
-  enableHomeSort: true,
+  enableHomeSort: false,
   homeSortField: "default",
   homeSortDirection: HOME_SORT_NATURAL_DIRECTION.default,
   compactShowTrafficTotal: true,
   compactShowBilling: true,
   compactShowUptime: true,
-  showConnections: false,
-  detailChartUnit: "percent",
-  detailNetworkUnit: "auto",
+  showConnections: true,
+  detailChartUnit: "bytes",
+  detailNetworkUnit: "mbs",
   detailSplitLayout: true,
   hiddenNodes: [],
   enableBackgroundImage: true,
@@ -123,11 +124,12 @@ function enabledUnlessFalse(value: unknown) {
 }
 
 function normalizeDetailChartUnit(value: unknown): DetailChartUnit {
-  return value === "bytes" ? "bytes" : "percent";
+  return value === "percent" ? "percent" : "bytes";
 }
 
 function normalizeDetailNetworkUnit(value: unknown): DetailNetworkUnit {
-  return value === "mbs" || value === "mbps" ? value : "auto";
+  // 旧版 "auto" 与未知值统一落到 MB/s（字节族自适应）。
+  return value === "mbps" ? "mbps" : "mbs";
 }
 
 // 管理员默认排序:字段非法回落 default;方向非法时回落该字段的自然方向(文本升、数值降)。
@@ -167,13 +169,14 @@ export function normalizeThemeSettings(
     showRegionBar: enabledUnlessFalse(settings?.showRegionBar),
     showCardGroup: enabledUnlessFalse(settings?.showCardGroup),
     homeGroupOrder: normalizeHomeGroupOrder(settings?.homeGroupOrder),
-    enableHomeSort: enabledUnlessFalse(settings?.enableHomeSort),
+    // 默认关闭(需手动开启):与参考站点默认一致,访客端排序由站长显式开启。
+    enableHomeSort: settings?.enableHomeSort === true,
     ...normalizeHomeSortDefault(settings?.homeSortField, settings?.homeSortDirection),
     compactShowTrafficTotal: enabledUnlessFalse(settings?.compactShowTrafficTotal),
     compactShowBilling: enabledUnlessFalse(settings?.compactShowBilling),
     compactShowUptime: enabledUnlessFalse(settings?.compactShowUptime),
-    // 默认关闭(需手动开启):连接数是个小众指标,很多 agent 也不上报,所以只在显式启用时才显示。
-    showConnections: settings?.showConnections === true,
+    // 默认开启:与参考站点默认一致;未上报连接数的节点会显示为 0,站长可手动关闭。
+    showConnections: enabledUnlessFalse(settings?.showConnections),
     detailChartUnit: normalizeDetailChartUnit(settings?.detailChartUnit),
     detailNetworkUnit: normalizeDetailNetworkUnit(settings?.detailNetworkUnit),
     detailSplitLayout: enabledUnlessFalse(settings?.detailSplitLayout),

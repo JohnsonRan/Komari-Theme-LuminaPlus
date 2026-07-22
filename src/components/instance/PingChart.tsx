@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import UplotReact from "uplot-react";
 import type uPlot from "uplot";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
@@ -284,10 +284,16 @@ export function PingChart({
   }, [chart]);
 
   const requestedXRange = useMemo(() => historyChartRangeSeconds(data), [data]);
+  // 取消固定时同时隐藏两幅图的 tooltip（延迟/丢包共享同一固定状态）。
+  const hideAllTooltips = useCallback(() => {
+    setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
+    setLossTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
+  }, []);
   // 两条图（延迟/丢包）共享同一套交互状态：光标同步 + 同一刷新按钮重置。
   const { onCreate, pinned, zoomed, pinnedRef } = useChartInteractions({
     fullRange: requestedXRange,
     resetSignal,
+    onUnpin: hideAllTooltips,
   });
   const coverageMeta = useMemo(() => {
     if (!data) return null;

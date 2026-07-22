@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useNodeMeta, useNodeMetrics } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
-import { InstanceSwitcher } from "./InstanceSwitcher";
-import { formatBytes, formatFixedMBsLabel, formatFixedMbpsLabel, formatUptimeDays } from "@/utils/format";
+import { formatByteRateLabel, formatBytes, formatTrafficRateLabel, formatUptimeDays } from "@/utils/format";
 import { resolveTrafficUsage } from "@/utils/traffic";
 import { InstancePanel } from "./InstancePanel";
 
@@ -45,19 +44,15 @@ export function InstanceDetails({
   const lastUpdated =
     metrics.updatedAt > 0 ? TIME_FORMATTER.format(metrics.updatedAt) : "—";
   const networkUnit = themeSettings.detailNetworkUnit;
+  // 单位族内自适应：mbs 按字节（B/s · KB/s · MB/s），mbps 按比特（Kbps · Mbps · Gbps）。
   const formatNetRate = (bytesPerSec: number) =>
-    networkUnit === "mbs"
-      ? formatFixedMBsLabel(bytesPerSec)
-      : networkUnit === "mbps"
-        ? formatFixedMbpsLabel(bytesPerSec)
-        : `${formatBytes(bytesPerSec)}/s`;
-  const trimmedName = meta.name?.trim();
-  const panelTitle = trimmedName ? `${trimmedName} 信息` : "实例信息";
+    networkUnit === "mbps"
+      ? formatTrafficRateLabel(bytesPerSec)
+      : formatByteRateLabel(bytesPerSec);
 
   return (
     <InstancePanel
-      title={panelTitle}
-      titleAction={<InstanceSwitcher currentUuid={uuid} />}
+      className="instance-details-panel"
       description={
         isOnline ? undefined : "节点当前离线，以下展示最近一次上报的缓存数据。"
       }

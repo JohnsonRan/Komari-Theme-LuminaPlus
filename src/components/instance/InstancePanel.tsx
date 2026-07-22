@@ -13,7 +13,8 @@ export function InstancePanel({
   className,
 }: {
   id?: string;
-  title: string;
+  // 可选：详情页标题已移到页面吸顶栏，面板本身不再重复渲染标题行。
+  title?: string;
   kicker?: ReactNode;
   titleAction?: ReactNode;
   description?: ReactNode;
@@ -21,19 +22,24 @@ export function InstancePanel({
   children: ReactNode;
   className?: string;
 }) {
+  const hasHeadings = title != null || kicker != null || description != null;
   return (
     <section id={id} className={clsx("instance-panel", kicker != null && "has-kicker", className)}>
-      <header className="instance-panel-header">
-        <div className="instance-panel-headings">
-          {kicker != null && <span className="instance-panel-kicker">{kicker}</span>}
-          <div className="instance-panel-title-row">
-            <h2 className="instance-panel-title">{title}</h2>
-            {titleAction}
+      {(hasHeadings || aside != null) && (
+        <header className="instance-panel-header">
+          <div className="instance-panel-headings">
+            {kicker != null && <span className="instance-panel-kicker">{kicker}</span>}
+            {title != null && (
+              <div className="instance-panel-title-row">
+                <h2 className="instance-panel-title">{title}</h2>
+                {titleAction}
+              </div>
+            )}
+            {description != null && <p className="instance-panel-description">{description}</p>}
           </div>
-          {description != null && <p className="instance-panel-description">{description}</p>}
-        </div>
-        {aside != null && <div className="instance-panel-aside">{aside}</div>}
-      </header>
+          {aside != null && <div className="instance-panel-aside">{aside}</div>}
+        </header>
+      )}
       {children}
     </section>
   );

@@ -426,15 +426,30 @@ export function useResponsiveChartSize(mode: "grid" | "wide" | "strip") {
   return { ...size, ref };
 }
 
+// 跨图表单一固定：同一页面同一时刻最多只有一张图表处于「固定 tooltip」状态，
+// 固定新图表时自动解除其余图表的固定，避免满屏钉死的 tooltip 互相干扰。
+const pinnedChartUnpinners = new Set<() => void>();
+
+function registerPinnedChart(unpin: () => void) {
+  for (const other of [...pinnedChartUnpinners]) {
+    if (other !== unpin) other();
+  }
+  pinnedChartUnpinners.add(unpin);
+}
+
 // 图表交互：滚轮缩放 X 轴、点击固定 tooltip、重置视图。
 // fullRange 为可缩放的完整边界（历史模式用请求范围，实时用 null 自动取数据边界）。
 // resetSignal 变化时重置缩放并取消固定（由父组件的刷新按钮驱动）。
+// onUnpin 在取消固定时回调（供调用方隐藏 tooltip）——移动端没有 hover，
+// 取消固定后若不主动隐藏，tooltip 会永远留在原处。
 export function useChartInteractions({
   fullRange,
   resetSignal,
+  onUnpin,
 }: {
   fullRange: [number, number] | null;
   resetSignal: number;
+  onUnpin?: () => void;
 }) {
   const chartRef = useRef<uPlot | null>(null);
   const [pinned, setPinned] = useState(false);
@@ -443,6 +458,24 @@ export function useChartInteractions({
   const fullRangeRef = useRef(fullRange);
   fullRangeRef.current = fullRange;
   const firstReset = useRef(true);
+  const unpinRef = useRef<() => void>(() => {});
+  const onUnpinRef = useRef(onUnpin);
+  onUnpinRef.current = onUnpin;
+
+  // 卸载时从全局注册表摘除，避免已销毁图表的 setState 泄漏。
+  useEffect(() => {
+    const unpin = () => {
+      pinnedChartUnpinners.delete(unpin);
+      if (!pinnedRef.current) return;
+      pinnedRef.current = false;
+      setPinned(false);
+      onUnpinRef.current?.();
+    };
+    unpinRef.current = unpin;
+    return () => {
+      pinnedChartUnpinners.delete(unpin);
+    };
+  }, []);
 
   const onCreate = useCallback((chart: uPlot) => {
     chartRef.current = chart;
@@ -492,18 +525,54 @@ export function useChartInteractions({
       setZoomed(!isFull);
     };
 
-    const onClick = () => {
-      pinnedRef.current = !pinnedRef.current;
-      setPinned(pinnedRef.current);
+    // uPlot 在 wrap 上以捕获阶段监听 click：只要按下到松开期间光标有过任何位移
+    //（真实点击几乎必然发生），就会走 drag.click 默认实现 stopImmediatePropagation，
+    // 把 click 事件整个吞掉，导致 over 上的 click 监听基本永远收不到事件。
+    // 因此改用 pointerdown/pointerup 自行检测 tap：位移小于阈值视为点击，切换固定。
+    // 该方案同时覆盖鼠标与触摸（移动端没有 hover，tap 是唯一入口）。
+    let downPointerId = -1;
+    let downX = 0;
+    let downY = 0;
+    const onPointerDown = (event: PointerEvent) => {
+      downPointerId = event.pointerId;
+      downX = event.clientX;
+      downY = event.clientY;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId !== downPointerId) return;
+      downPointerId = -1;
+      const dx = event.clientX - downX;
+      const dy = event.clientY - downY;
+      // 位移超过 8px 视为拖拽缩放，不触发固定切换。
+      if (dx * dx + dy * dy > 64) return;
+
+      if (pinnedRef.current) {
+        unpinRef.current();
+        return;
+      }
+      // 先把光标落到 tap 位置并触发 tooltip 更新（此刻 pinnedRef 仍为 false，
+      // setCursor hook 才会排期渲染），再置为固定——桌面端光标本就在此处不受影响，
+      // 移动端则会在手指点按处直接弹出 tooltip。
+      const rect = over.getBoundingClientRect();
+      chart.setCursor({
+        left: event.clientX - rect.left,
+        top: event.clientY - rect.top,
+      });
+      pinnedRef.current = true;
+      setPinned(true);
+      registerPinnedChart(unpinRef.current);
     };
 
     over.addEventListener("wheel", onWheel, { passive: false });
-    over.addEventListener("click", onClick);
+    over.addEventListener("pointerdown", onPointerDown);
+    over.addEventListener("pointerup", onPointerUp);
 
     const originalDestroy = chart.destroy.bind(chart);
     chart.destroy = () => {
       over.removeEventListener("wheel", onWheel);
-      over.removeEventListener("click", onClick);
+      over.removeEventListener("pointerdown", onPointerDown);
+      over.removeEventListener("pointerup", onPointerUp);
+      pinnedChartUnpinners.delete(unpinRef.current);
       pinnedRef.current = false;
       setPinned(false);
       setZoomed(false);
@@ -512,8 +581,7 @@ export function useChartInteractions({
   }, []);
 
   const resetView = useCallback(() => {
-    pinnedRef.current = false;
-    setPinned(false);
+    unpinRef.current();
     setZoomed(false);
     const chart = chartRef.current;
     if (!chart) return;

@@ -606,12 +606,6 @@ export function ThemeManage() {
   return (
     <div className="theme-manage flex flex-col gap-5 py-2">
       <header className="theme-masthead">
-        <div className="theme-masthead-topline">
-          <Link to="/" className="instance-page-back">
-            <ArrowLeft size={14} />
-            返回首页
-          </Link>
-        </div>
         <div className="theme-masthead-main">
           <div className="theme-masthead-headings">
             <span className="theme-masthead-kicker">LUMINAPLUS · 主题控制台</span>
@@ -635,8 +629,12 @@ export function ThemeManage() {
         </div>
       </header>
 
-      {/* 吸顶栏:横向可滚动的分区导航 + 常驻的保存/重置按钮,页面滚动后始终可见。 */}
+      {/* 吸顶栏:返回首页 + 横向可滚动的分区导航 + 常驻的保存/重置按钮,页面滚动后始终可见。 */}
       <div className="theme-manage-sticky-bar">
+        <Link to="/" className="instance-page-back theme-manage-back">
+          <ArrowLeft size={14} />
+          返回首页
+        </Link>
         <nav className="theme-manage-section-nav" aria-label="设置分区导航">
           {THEME_SECTIONS.map((section) => (
             <button
@@ -658,8 +656,9 @@ export function ThemeManage() {
             onClick={handleReset}
             disabled={!isDirty || saving}
             className="theme-manage-button"
+            aria-label="重置设置"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={14} aria-hidden />
             <span>重置</span>
           </button>
           <button
@@ -667,8 +666,9 @@ export function ThemeManage() {
             onClick={handleSave}
             disabled={!isDirty || saving}
             className="theme-manage-button is-primary"
+            aria-label={saving ? "保存中" : "保存设置"}
           >
-            {saving ? <Spinner size={14} /> : <Save size={14} />}
+            {saving ? <Spinner size={14} /> : <Save size={14} aria-hidden />}
             <span>{saving ? "保存中" : "保存设置"}</span>
           </button>
         </div>
@@ -1501,18 +1501,10 @@ export function ThemeManage() {
                 实时网速单位
               </div>
               <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                自适应按 bits 进位（Kbps / Mbps / Gbps）；也可固定为 MB/s 或 Mbps。
+                MB/s 按字节进位（B/s · KB/s · MB/s · GB/s），Mbps 按比特进位（Kbps · Mbps · Gbps · Tbps），均随当前网速自动选档。
               </div>
             </div>
             <div className="instance-segmented is-scrollable">
-              <button
-                type="button"
-                data-active={draft.detailNetworkUnit === "auto" ? "true" : "false"}
-                aria-pressed={draft.detailNetworkUnit === "auto"}
-                onClick={() => patch("detailNetworkUnit", "auto")}
-              >
-                自适应
-              </button>
               <button
                 type="button"
                 data-active={draft.detailNetworkUnit === "mbs" ? "true" : "false"}

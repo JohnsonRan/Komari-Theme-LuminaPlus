@@ -21,23 +21,28 @@ describe("normalizeThemeSettings", () => {
 
   it("defaults detail chart/network units and falls back on unknown values", () => {
     const base = normalizeThemeSettings({});
-    expect(base.detailChartUnit).toBe("percent");
-    expect(base.detailNetworkUnit).toBe("auto");
+    expect(base.detailChartUnit).toBe("bytes");
+    expect(base.detailNetworkUnit).toBe("mbs");
 
-    expect(normalizeThemeSettings({ detailChartUnit: "bytes" }).detailChartUnit).toBe("bytes");
+    expect(normalizeThemeSettings({ detailChartUnit: "percent" }).detailChartUnit).toBe("percent");
     expect(normalizeThemeSettings({ detailChartUnit: "nope" } as never).detailChartUnit).toBe(
-      "percent",
+      "bytes",
     );
-    expect(normalizeThemeSettings({ detailNetworkUnit: "mbs" }).detailNetworkUnit).toBe("mbs");
     expect(normalizeThemeSettings({ detailNetworkUnit: "mbps" }).detailNetworkUnit).toBe("mbps");
+    // 旧版 "auto" 与未知值归一化到 MB/s（字节族自适应）。
+    expect(normalizeThemeSettings({ detailNetworkUnit: "auto" } as never).detailNetworkUnit).toBe(
+      "mbs",
+    );
     expect(normalizeThemeSettings({ detailNetworkUnit: "nope" } as never).detailNetworkUnit).toBe(
-      "auto",
+      "mbs",
     );
   });
 
-  it("defaults home sort to weight ascending and falls back to a field's natural direction", () => {
+  it("defaults home sort to disabled with weight ascending and falls back to a field's natural direction", () => {
     const base = normalizeThemeSettings({});
-    expect(base.enableHomeSort).toBe(true);
+    // 默认关闭(与参考站点一致),需站长显式开启。
+    expect(base.enableHomeSort).toBe(false);
+    expect(normalizeThemeSettings({ enableHomeSort: true }).enableHomeSort).toBe(true);
     expect(base.homeSortField).toBe("default");
     expect(base.homeSortDirection).toBe("asc");
 
@@ -54,6 +59,13 @@ describe("normalizeThemeSettings", () => {
     expect(
       normalizeThemeSettings({ fakePingForUnbound: "yes" } as never).fakePingForUnbound,
     ).toBe(false);
+  });
+
+  it("defaults connections display to on unless explicitly disabled", () => {
+    // 默认开启(与参考站点一致);仅显式 false 才关闭。
+    expect(normalizeThemeSettings({}).showConnections).toBe(true);
+    expect(normalizeThemeSettings({ showConnections: false }).showConnections).toBe(false);
+    expect(normalizeThemeSettings({ showConnections: true }).showConnections).toBe(true);
   });
 
   it("parses hiddenNodes from a delimited string and dedupes", () => {

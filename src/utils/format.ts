@@ -97,25 +97,6 @@ export function formatByteRateLabel(bytesPerSec: number | undefined | null): str
   return `${value} ${unit}`;
 }
 
-// 固定单位速率：主题设置要求统一口径时不做自适应换算。
-// MB/s 按 1024 进制(与 formatBytes 一致)；Mbps 按 1000 进制、比特(网络惯例)。
-function formatFixedRateValue(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  if (value >= 100) return Math.round(value).toString();
-  if (value >= 10) return trimFixed(value, 1);
-  return trimFixed(value, 2);
-}
-
-export function formatFixedMBsLabel(bytesPerSec: number | undefined | null): string {
-  const mb = (bytesPerSec ?? 0) / (1024 * 1024);
-  return `${formatFixedRateValue(mb)} MB/s`;
-}
-
-export function formatFixedMbpsLabel(bytesPerSec: number | undefined | null): string {
-  const mbps = ((bytesPerSec ?? 0) * 8) / 1_000_000;
-  return `${formatFixedRateValue(mbps)} Mbps`;
-}
-
 export function formatUptimeDays(seconds: number): { value: string; unit: string } {
   if (!Number.isFinite(seconds) || seconds <= 0) return { value: "—", unit: "" };
   const days = seconds / 86400;

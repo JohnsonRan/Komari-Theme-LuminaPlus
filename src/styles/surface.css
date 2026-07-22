@@ -610,14 +610,6 @@ body::after {
   padding: 20px 24px 22px;
 }
 
-.theme-masthead-topline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .theme-masthead-main {
   display: flex;
   flex-wrap: wrap;
@@ -716,6 +708,11 @@ body::after {
 .theme-manage-sticky-bar .theme-manage-toolbar-actions {
   flex: 0 0 auto;
   flex-wrap: nowrap;
+}
+
+/* 吸顶栏内的返回首页链接:不收缩、不换行,空间不足时由分区导航横向滚动让位。 */
+.theme-manage-sticky-bar .theme-manage-back {
+  white-space: nowrap;
 }
 
 .theme-manage-section-nav {
@@ -1047,6 +1044,7 @@ body::after {
 .instance-page-back {
   display: inline-flex;
   width: fit-content;
+  flex: 0 0 auto;
   align-items: center;
   gap: 0.35rem;
   color: var(--text-secondary);
@@ -1055,6 +1053,50 @@ body::after {
 }
 .instance-page-back:hover {
   color: var(--text-primary);
+}
+
+/* 详情页吸顶栏：返回 + 节点标题 + 快速切换器，滚动查看图表时始终悬浮。
+   玻璃背景与主题管理吸顶栏同一语言；top 预留刘海屏安全区。 */
+.instance-page-sticky-bar {
+  position: sticky;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-a) 86%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 14px 34px -26px rgba(0, 0, 0, 0.5);
+}
+
+.instance-page-title {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* 吸顶栏内的切换器靠右，下拉面板改为右对齐，避免超出视口右缘。 */
+.instance-page-sticky-bar .instance-switcher-panel {
+  left: auto;
+  right: 0;
+}
+
+/* 桌面分栏模式下侧栏已提供节点切换，标题栏的下拉切换器（小箭头）隐藏。 */
+@media (min-width: 901px) {
+  .instance-page.is-split .instance-page-sticky-bar .instance-switcher {
+    display: none;
+  }
 }
 
 .instance-panel {
@@ -1390,6 +1432,8 @@ body::after {
   align-items: center;
   justify-content: center;
   gap: 10px;
+  /* 自动滚动对齐（alignCharts）时避开吸顶栏高度，不让控制区被遮挡。 */
+  scroll-margin-top: 64px;
 }
 
 .instance-chart-stage {
@@ -1603,6 +1647,13 @@ body::after {
   border-color: color-mix(in srgb, var(--border-strong) 70%, var(--chart-accent, var(--progress-cpu)) 30%);
 }
 
+/* 触屏设备没有悬停态：取消 hover 位移，避免点按后卡片卡在抬升状态。 */
+@media (hover: none) {
+  .instance-chart-card:hover {
+    transform: none;
+  }
+}
+
 .instance-chart-card-head {
   display: flex;
   align-items: flex-start;
@@ -1622,6 +1673,9 @@ body::after {
   min-width: 0;
   overflow: hidden;
   padding-bottom: 2px;
+  /* 触摸约定：垂直滑动仍滚动页面（pan-y），水平手势交给图表（uPlot drag.x 缩放）；
+     配合 tap 固定 tooltip，移动端图表才可正常操作。 */
+  touch-action: pan-y;
 }
 
 .instance-uplot-wrap .uplot {
@@ -1792,6 +1846,18 @@ body::after {
     border-radius: 16px;
   }
 
+  /* 移动端切换器触发按钮加大到 32px，满足触控目标。 */
+  .instance-switcher-trigger {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* 分段按钮与工具按钮加高，方便手指点按。 */
+  .instance-segmented button,
+  .instance-toggle-button {
+    min-height: 34px;
+  }
+
   .instance-chart-panel .instance-panel-header {
     flex-direction: column;
     align-items: flex-start;
@@ -1865,6 +1931,7 @@ body::after {
     gap: 8px;
     padding: 7px 8px;
     border-radius: 14px;
+    top: max(0px, env(safe-area-inset-top, 0px));
   }
 
   .theme-manage-sticky-bar .theme-manage-button {
@@ -1880,6 +1947,12 @@ body::after {
   .theme-manage-nav-chip {
     padding: 6px 10px;
     font-size: 11.5px;
+  }
+
+  /* 报头右侧账目式元信息窄屏换行，避免横向溢出。 */
+  .theme-masthead-meta {
+    flex-wrap: wrap;
+    gap: 14px 22px;
   }
 
   .theme-manage .instance-panel {
