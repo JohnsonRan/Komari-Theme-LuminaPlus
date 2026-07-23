@@ -86,7 +86,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       min: metrics.pingMin ?? ping.min,
       peak: metrics.pingMax ?? ping.peak,
     };
-  }, [ping, metrics?.pingLatest, metrics?.pingLoss, metrics?.pingAvg, metrics?.pingMin, metrics?.pingMax]);
+  }, [ping, metrics]);
 
   // ping 派生的颜色只在解析后的 ping 值变化时才变。
   const pingModel = useMemo(
@@ -173,5 +173,5 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
         ? formatRelativeTime(metrics.updatedAt)
         : null,
     };
-  }, [meta, metrics, metaModel, pingModel, resolvedPing, pingBuckets, trafficTrend]);
+  }, [meta, metrics, metaModel, pingModel, ping, resolvedPing, pingBuckets, trafficTrend]);
 }

@@ -672,7 +672,7 @@ export function useChartInteractions({
         originalDestroy();
       };
     },
-    [entry, syncKey],
+    [entry, syncKey, zoomXRangeRef],
   );
 
   const resetView = useCallback(() => {
