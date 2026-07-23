@@ -511,14 +511,14 @@ export function LoadChart({
   useEffect(() => {
     if (!active || !isRealtime || !node) return;
     if (chartHovered) {
-      realtimeBufferRef.current.push(point);
+      realtimeBufferRef.current.push(pointFromNode(node));
       return;
     }
     const buffered = realtimeBufferRef.current;
     realtimeBufferRef.current = [];
     setRealtimePoints((prev) => {
       let next = prev;
-      for (const candidate of [...buffered, point]) {
+      for (const candidate of [...buffered, pointFromNode(node)]) {
         const last = next[next.length - 1];
         if (last && Math.abs(last.time - candidate.time) < 1) continue;
         next = [...next, candidate];
