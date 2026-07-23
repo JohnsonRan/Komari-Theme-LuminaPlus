@@ -510,7 +510,11 @@ export function LoadChart({
 
   useEffect(() => {
     if (!active || !isRealtime || !node) return;
-    const point = pointFromNode(node);
+    // 节点转为离线时插入全 null 断点：图表线条在此处断开，而不是把最后
+    // 一次上报的旧值平拉成水平线（那会让在线节点的线条显示出错）。
+    const point = node.online === false
+      ? ({ time: Date.now() / 1000 } as ChartPoint)
+      : pointFromNode(node);
     if (chartHovered) {
       realtimeBufferRef.current.push(point);
       return;

@@ -59,6 +59,10 @@ const IDLE_NODE_INFO_INTERVAL_MS = 60_000;
 // WebSocket 实时通道（同默认主题 /api/clients）是实时数据的唯一来源，不作 RPC 降级。
 const WS_RECONNECT_DELAY_MS = 3_000;
 const WS_FRESH_THRESHOLD_MS = 8_000;
+// 数据新鲜度阈值：updated_at 距当前超过此值时，即使后端 online 列表仍包含该节点，
+// 也强制视为离线。防御后端缓存残留——部分节点已关机但 dataMap 仍保留旧报文、
+// online 数组未及时剔除，导致前端把过期数据当实时值展示并污染总览统计。
+const STALE_DATA_THRESHOLD_MS = 30_000;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
 const EMPTY_TRAFFIC_TREND_SAMPLE: TrafficTrendSample = {
   value: 0,
@@ -727,14 +731,40 @@ function applyWsLivePayload(payload: unknown) {
   let nextMetricsByUuid = state.metricsByUuid;
   let nextTrafficTrends = state.trafficTrends;
 
+  const now = Date.now();
+
   for (const uuid of state.order) {
     const meta = state.metaByUuid[uuid];
     const prev = state.metricsByUuid[uuid];
     if (!meta || !prev) continue;
-    if (!(uuid in dataMap)) continue;
 
-    const online = onlineSet.has(uuid);
+    if (!(uuid in dataMap)) {
+      // 节点从本帧 dataMap 中消失：若此前为在线且最后上报时间已过期，
+      // 主动标记离线，避免永远停留在 online: true 的残留状态。
+      if (
+        prev.online !== false &&
+        prev.updatedAt > 0 &&
+        now - prev.updatedAt > STALE_DATA_THRESHOLD_MS
+      ) {
+        if (nextMetricsByUuid === state.metricsByUuid) {
+          nextMetricsByUuid = { ...state.metricsByUuid };
+        }
+        nextMetricsByUuid[uuid] = { ...prev, online: false };
+        touchedMetrics.add(uuid);
+      }
+      continue;
+    }
+
+    let online = onlineSet.has(uuid);
     const realtime = normalizeRealtime(dataMap[uuid], meta, prev);
+    // 后端 online 列表可能滞后：节点实际已掉线但缓存报文仍带旧 updated_at 留在帧里。
+    // 数据过期时以时间戳为准，强制离线（帧未携带时间戳时仍信任 online 数组）。
+    if (online && realtime) {
+      const frameTimestamp = toTimestamp(realtime.updated_at);
+      if (frameTimestamp > 0 && now - frameTimestamp > STALE_DATA_THRESHOLD_MS) {
+        online = false;
+      }
+    }
     const merged = realtime
       ? mergeRealtime(prev, realtime, online, uuid)
       : { ...prev, online };
