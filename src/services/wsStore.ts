@@ -59,6 +59,9 @@ const IDLE_NODE_INFO_INTERVAL_MS = 60_000;
 // WebSocket 实时通道（同默认主题 /api/clients）是实时数据的唯一来源，不作 RPC 降级。
 const WS_RECONNECT_DELAY_MS = 3_000;
 const WS_FRESH_THRESHOLD_MS = 8_000;
+// 节点数据超过此阈值未更新时，强制视为离线，即使用户端 onlineSet 仍标记为在线。
+// WebSocket 帧间隔 ~2 秒，60 秒的窗口足够容忍网络抖动，同时能捕获小时/天级的过期数据。
+const NODE_DATA_STALE_MS = 60_000;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
 const EMPTY_TRAFFIC_TREND_SAMPLE: TrafficTrendSample = {
   value: 0,
@@ -739,26 +742,37 @@ function applyWsLivePayload(payload: unknown) {
       ? mergeRealtime(prev, realtime, online, uuid)
       : { ...prev, online };
 
-    if (!shallowEqualMetrics(prev, merged)) {
+    // 数据过旧时强制离线：即使用户端将节点标记为在线，只要 updatedAt
+    // 超过 NODE_DATA_STALE_MS 未变化就认为节点已失联。
+    // 节点必须曾上报过数据（updatedAt > 0）才算在线，避免后端 onlineSet 包含
+    // 从未实际上报数据的空节点时将其错误标记为在线。
+    const resolvedOnline =
+      merged.updatedAt > 0 && Date.now() - merged.updatedAt > NODE_DATA_STALE_MS
+        ? false
+        : merged.updatedAt > 0 && merged.online;
+    const metricsToUse =
+      resolvedOnline === merged.online ? merged : { ...merged, online: resolvedOnline };
+
+    if (!shallowEqualMetrics(prev, metricsToUse)) {
       if (nextMetricsByUuid === state.metricsByUuid) {
         nextMetricsByUuid = { ...state.metricsByUuid };
       }
-      nextMetricsByUuid[uuid] = merged;
+      nextMetricsByUuid[uuid] = metricsToUse;
       touchedMetrics.add(uuid);
     }
 
     const prevTrend = state.trafficTrends[uuid] ?? EMPTY_TRAFFIC_TREND;
     const nextUp = updateTrafficTrendSeries(
       prevTrend.up,
-      merged.netUp,
-      merged.updatedAt,
-      merged.online,
+      metricsToUse.netUp,
+      metricsToUse.updatedAt,
+      resolvedOnline,
     );
     const nextDown = updateTrafficTrendSeries(
       prevTrend.down,
-      merged.netDown,
-      merged.updatedAt,
-      merged.online,
+      metricsToUse.netDown,
+      metricsToUse.updatedAt,
+      resolvedOnline,
     );
 
     if (nextUp.changed || nextDown.changed) {
@@ -774,6 +788,43 @@ function applyWsLivePayload(payload: unknown) {
         },
       };
       touchedTrafficTrends.add(uuid);
+    }
+  }
+
+  // 处理 dataMap 中未出现的节点：它们没有上报数据。
+  // 同时使用 updatedAt 和 NODE_DATA_STALE_MS 校验数据时效，仅当节点曾上报过数
+  // 据且未过期、且后端标记为在线时才视为在线，避免空节点被错误标记为在线。
+  // 并清空流量趋势，避免节点离线后依然显示为在线。
+  for (const uuid of state.order) {
+    if (uuid in dataMap) continue;
+    const prev = state.metricsByUuid[uuid];
+    if (!prev) continue;
+
+    // 对 dataMap 中未出现的节点，同样考虑数据过时：prev.updatedAt 超过
+    // NODE_DATA_STALE_MS 未变化时视为失联，覆盖 onlineSet 的标记。
+    const isStale =
+      prev.updatedAt > 0 && Date.now() - prev.updatedAt > NODE_DATA_STALE_MS;
+    // 节点必须曾上报过数据（updatedAt > 0）且数据未过期、且后端标记为在线时才算在线。
+    // 避免后端 onlineSet 包含从未实际上报数据的节点时将其错误标记为在线。
+    const online = prev.updatedAt > 0 && !isStale && onlineSet.has(uuid);
+    if (prev.online === online) continue;
+
+    if (nextMetricsByUuid === state.metricsByUuid) {
+      nextMetricsByUuid = { ...state.metricsByUuid };
+    }
+    nextMetricsByUuid[uuid] = { ...prev, online };
+    touchedMetrics.add(uuid);
+
+    // 节点离线时清空流量趋势，和主循环中 updateTrafficTrendSeries(…, false) 的行为一致。
+    if (online === false) {
+      const prevTrend = state.trafficTrends[uuid] ?? EMPTY_TRAFFIC_TREND;
+      if (prevTrend.up.size > 0 || prevTrend.down.size > 0) {
+        if (nextTrafficTrends === state.trafficTrends) {
+          nextTrafficTrends = { ...state.trafficTrends };
+        }
+        nextTrafficTrends[uuid] = EMPTY_TRAFFIC_TREND;
+        touchedTrafficTrends.add(uuid);
+      }
     }
   }
 
