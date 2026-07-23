@@ -109,10 +109,14 @@ function HomeOverviewCards({
   overview,
   dense,
   onWarmTraffic,
+  nodes,
+  nameByUuid,
 }: {
   overview: HomeOverview;
   dense: boolean;
   onWarmTraffic: () => void;
+  nodes: HomeNodeSummary[];
+  nameByUuid: Map<string, string>;
 }) {
   const [trafficValue, trafficUnit] = formatBytes(
     overview.trafficUp + overview.trafficDown,
@@ -129,6 +133,35 @@ function HomeOverviewCards({
   const bandwidthCompactLabel = `↑${formatCompactBytes(overview.netUp)} ↓${formatCompactBytes(overview.netDown)}`;
   const connectionsDetailLabel = `TCP ${overview.connectionsTcp.toLocaleString()} · UDP ${overview.connectionsUdp.toLocaleString()}`;
   const connectionsCompactLabel = `TCP ${formatCompactCount(overview.connectionsTcp)} UDP ${formatCompactCount(overview.connectionsUdp)}`;
+
+  // 实时带宽/累计流量/实时连接 各自 TOP 3 节点
+  const topBandwidth = useMemo(
+    () =>
+      nodes
+        .filter((n) => n.online === true)
+        .map((n) => ({ uuid: n.uuid, name: nameByUuid.get(n.uuid) || n.uuid.slice(0, 8), value: n.netUp + n.netDown }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3),
+    [nodes, nameByUuid],
+  );
+  const topTraffic = useMemo(
+    () =>
+      nodes
+        .map((n) => ({ uuid: n.uuid, name: nameByUuid.get(n.uuid) || n.uuid.slice(0, 8), value: n.trafficUp + n.trafficDown }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3),
+    [nodes, nameByUuid],
+  );
+  const topConnections = useMemo(
+    () =>
+      nodes
+        .filter((n) => n.online === true)
+        .map((n) => ({ uuid: n.uuid, name: nameByUuid.get(n.uuid) || n.uuid.slice(0, 8), value: n.connectionsTcp + n.connectionsUdp }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3),
+    [nodes, nameByUuid],
+  );
+  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
 
   return (
     <section className={`home-overview${dense ? " is-dense" : ""}`} aria-label="首页总览">
@@ -162,7 +195,12 @@ function HomeOverviewCards({
         )}
       </article>
 
-      <article className="overview-card" data-metric="bandwidth">
+      <article
+        className="overview-card"
+        data-metric="bandwidth"
+        onPointerEnter={() => setHoveredCard("bandwidth")}
+        onPointerLeave={() => setHoveredCard(null)}
+      >
         <span className="overview-card-label">实时带宽</span>
         <div className="overview-card-main">
           <p
@@ -179,9 +217,26 @@ function HomeOverviewCards({
             <span className="overview-card-sub-compact">{bandwidthCompactLabel}</span>
           </p>
         </div>
+        {hoveredCard === "bandwidth" && topBandwidth.length > 0 && (
+          <div className="overview-card-tooltip">
+            <div className="overview-card-tooltip-title">实时带宽 TOP 3</div>
+            {topBandwidth.map((node, i) => (
+              <div key={node.uuid} className="overview-card-tooltip-row">
+                <span className="overview-card-tooltip-rank">{i + 1}</span>
+                <span className="overview-card-tooltip-name">{node.name}</span>
+                <strong className="overview-card-tooltip-value">{formatByteRateLabel(node.value)}</strong>
+              </div>
+            ))}
+          </div>
+        )}
       </article>
 
-      <article className="overview-card" data-metric="traffic">
+      <article
+        className="overview-card"
+        data-metric="traffic"
+        onPointerEnter={() => setHoveredCard("traffic")}
+        onPointerLeave={() => setHoveredCard(null)}
+      >
         <div className="overview-card-head">
           <span className="overview-card-label">累计流量</span>
           <Link
@@ -207,9 +262,26 @@ function HomeOverviewCards({
             <span className="overview-card-sub-compact">{trafficCompactLabel}</span>
           </p>
         </div>
+        {hoveredCard === "traffic" && topTraffic.length > 0 && (
+          <div className="overview-card-tooltip">
+            <div className="overview-card-tooltip-title">累计流量 TOP 3</div>
+            {topTraffic.map((node, i) => (
+              <div key={node.uuid} className="overview-card-tooltip-row">
+                <span className="overview-card-tooltip-rank">{i + 1}</span>
+                <span className="overview-card-tooltip-name">{node.name}</span>
+                <strong className="overview-card-tooltip-value">{formatBytes(node.value)}</strong>
+              </div>
+            ))}
+          </div>
+        )}
       </article>
 
-      <article className="overview-card" data-metric="connections">
+      <article
+        className="overview-card"
+        data-metric="connections"
+        onPointerEnter={() => setHoveredCard("connections")}
+        onPointerLeave={() => setHoveredCard(null)}
+      >
         <span className="overview-card-label">实时连接</span>
         <div className="overview-card-main">
           <p className="overview-card-value">
@@ -222,6 +294,18 @@ function HomeOverviewCards({
             <span className="overview-card-sub-compact">{connectionsCompactLabel}</span>
           </p>
         </div>
+        {hoveredCard === "connections" && topConnections.length > 0 && (
+          <div className="overview-card-tooltip">
+            <div className="overview-card-tooltip-title">实时连接 TOP 3</div>
+            {topConnections.map((node, i) => (
+              <div key={node.uuid} className="overview-card-tooltip-row">
+                <span className="overview-card-tooltip-rank">{i + 1}</span>
+                <span className="overview-card-tooltip-name">{node.name}</span>
+                <strong className="overview-card-tooltip-value">{node.value.toLocaleString()}</strong>
+              </div>
+            ))}
+          </div>
+        )}
       </article>
     </section>
   );
@@ -536,6 +620,8 @@ export function NodeGrid() {
           overview={overview}
           dense={mode === "mini" || mode === "list"}
           onWarmTraffic={warmTrafficPage}
+          nodes={visibleNodes}
+          nameByUuid={nameByUuid}
         />
       )}
     </>

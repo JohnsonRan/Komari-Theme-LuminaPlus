@@ -562,9 +562,61 @@
   text-overflow: ellipsis;
 }
 
-/* 在线条:左绿=在线、右红=离线,中间中性轨道=未知。初始用中性而非红色,避免指标
-   到达前首帧闪红;随后绿/红从两端同时长入。准确的「12 / 14」就在其上方,所以这条
-   只作快速一瞥用。 */
+/* 概览卡片悬停 TOP 3 浮层 */
+.overview-card-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 16;
+  min-width: 180px;
+  width: max-content;
+  max-width: 260px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-elev) 98%, black 2%);
+  box-shadow: 0 14px 34px -18px rgba(0, 0, 0, 0.8);
+  padding: 8px 10px;
+}
+
+.overview-card-tooltip-title {
+  margin-bottom: 5px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.overview-card-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.overview-card-tooltip-rank {
+  width: 14px;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.overview-card-tooltip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-card-tooltip-value {
+  color: var(--text-primary);
+  font-weight: 650;
+  flex-shrink: 0;
+}
 .overview-bar {
   display: flex;
   justify-content: space-between;
